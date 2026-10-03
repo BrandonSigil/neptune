@@ -6,7 +6,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 PFX="$HERE/build/prefix"
 DL="$HERE/build/dl"
-EPOXY_URL=https://github.com/anholt/libepoxy/releases/download/1.5.10/libepoxy-1.5.10.tar.xz
+EPOXY_URL=https://download.gnome.org/sources/libepoxy/1.5/libepoxy-1.5.10.tar.xz
 EPOXY_SHA256=072cda4b59dd098bba8c2363a6247299db1fa89411dc221c8b81b8ee8192e623
 mkdir -p "$DL"
 if [ ! -f "$PFX/lib/libepoxy.0.dylib" ]; then
