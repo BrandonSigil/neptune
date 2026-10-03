@@ -1,3 +1,4 @@
+#include <stdlib.h>
 /*
  * Copyright 2026 Turing Software LLC
  * SPDX-License-Identifier: MIT
@@ -38,6 +39,43 @@ static const GUID *const context_tiers[] = {
    &NPT_IID_ID3D11DeviceContext4, NULL,
 };
 
+/* SailOver test trace (NPT_TRACE_STAGING=<max lines>): every context call that touches a STAGING or mapped texture,
+ * to follow the Scaleform glyph cache (staging R8 textures). Off by default. */
+static int
+npt_trace_staging_take(void)
+{
+   static int budget = -1;
+   if (budget < 0) {
+      char buf[16];
+      DWORD n = GetEnvironmentVariableA("NPT_TRACE_STAGING", buf, sizeof(buf));
+      budget = (n > 0 && n < sizeof(buf)) ? atoi(buf) : 0;
+   }
+   if (budget <= 0)
+      return 0;
+   budget--;
+   return 1;
+}
+
+static bool
+npt_trace_staging_interesting(void *res)
+{
+   struct npt_d3d11_texture *t = npt_d3d11_texture_cast(res);
+   return t && (npt_d3d11_texture_get_usage(t) == D3D11_USAGE_STAGING || npt_d3d11_texture_get_is_mapped(t));
+}
+
+static const char *
+npt_trace_res(void *res, char *buf, size_t len)
+{
+   struct npt_d3d11_texture *t = npt_d3d11_texture_cast(res);
+   if (t)
+      snprintf(buf, len, "tex %p(u%u m%d)", res, npt_d3d11_texture_get_usage(t), npt_d3d11_texture_get_is_mapped(t));
+   else if (npt_d3d11_buffer_cast(res))
+      snprintf(buf, len, "buf %p", res);
+   else
+      snprintf(buf, len, "res %p", res);
+   return buf;
+}
+
 static uint32_t
 npt_d3d11_map_to_access_flags(D3D11_MAP map_type)
 {
@@ -59,6 +97,251 @@ npt_d3d11_map_to_access_flags(D3D11_MAP map_type)
 
 
 /*
+ * SailOver: deferred, ranged sync of dynamic vertex and index buffers.
+ *
+ * The rename-ring path ships the whole buffer at every Unmap. Rocket League (UE3) streams its immediate-mode geometry
+ * through a 4 MiB dynamic vertex buffer and index buffer with Map(WRITE_NO_OVERWRITE) appends: about 7000 Unmaps per
+ * second, each copying 4 MiB on the host (about 30 GB/s of memcpy, half the renderer's ring thread). A dynamic buffer
+ * whose only bind flags are VERTEX_BUFFER/INDEX_BUFFER can only be read by input-assembler draws (and copies), so its
+ * Unmap is deferred and each draw ships just the bytes it reads: the vertex range of its vertex buffers and the index
+ * range of its index buffer (the vertex range of an indexed draw comes from scanning the indices, which the guest has
+ * in the same slot memory). Draws whose reads cannot be bounded (instancing, indirect, DrawAuto, a static index buffer)
+ * ship whole buffers, as before. Copies flush whole buffers first. NPT_DEFER_DYNAMIC=0 turns this off.
+ */
+#define NPT_DEFER_MAX_CTX 8
+#define NPT_DEFER_VB_SLOTS 32
+
+struct npt_defer_ctx {
+   void *self;
+   bool immediate;
+   struct npt_d3d11_buffer *vb[NPT_DEFER_VB_SLOTS];
+   UINT vb_stride[NPT_DEFER_VB_SLOTS], vb_offset[NPT_DEFER_VB_SLOTS];
+   struct npt_d3d11_buffer *ib;
+   DXGI_FORMAT ib_format;
+   UINT ib_offset;
+};
+
+static struct npt_defer_ctx npt_defer_ctxs[NPT_DEFER_MAX_CTX];
+static struct { uint64_t ships, bytes, full, skipped, t0; } npt_defer_stats;
+
+static bool
+npt_defer_enabled(void)
+{
+   static int on = -1;
+   if (on < 0) {
+      char buf[8];
+      DWORD n = GetEnvironmentVariableA("NPT_DEFER_DYNAMIC", buf, sizeof(buf));
+      on = !(n > 0 && n < sizeof(buf) && buf[0] == '0');
+      npt_log("deferred dynamic VB/IB sync %s", on ? "on" : "off");
+   }
+   return on;
+}
+
+static struct npt_defer_ctx *
+npt_defer_ctx_get(void *self, bool create)
+{
+   for (unsigned i = 0; i < NPT_DEFER_MAX_CTX; i++)
+      if (npt_defer_ctxs[i].self == self)
+         return &npt_defer_ctxs[i];
+   if (!create)
+      return NULL;
+   for (unsigned i = 0; i < NPT_DEFER_MAX_CTX; i++)
+      if (!npt_defer_ctxs[i].self) {
+         struct npt_defer_ctx *c = &npt_defer_ctxs[i];
+         memset(c, 0, sizeof(*c));
+         c->self = self;
+         c->immediate = npt_id3d11devicecontext_default_GetType(self) == D3D11_DEVICE_CONTEXT_IMMEDIATE;
+         return c;
+      }
+   return NULL;
+}
+
+/* Whether this buffer's DISCARD/NO_OVERWRITE Unmaps on this context are deferred. */
+static bool
+npt_defer_buffer(void *self, struct npt_d3d11_buffer *b)
+{
+   struct npt_d3d11_buffer_aux *aux = npt_d3d11_buffer_get_aux(b);
+   if (!aux)
+      return false;
+   if (aux->defer < 0) {
+      D3D11_BUFFER_DESC d;
+      const UINT ia = D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER;
+      aux->defer = npt_defer_enabled() && npt_d3d11_buffer_fill_desc(b, &d) && d.Usage == D3D11_USAGE_DYNAMIC &&
+                   d.BindFlags && !(d.BindFlags & ~ia) && !d.MiscFlags;
+   }
+   if (!aux->defer)
+      return false;
+   struct npt_defer_ctx *c = npt_defer_ctx_get(self, true);
+   return c && c->immediate;
+}
+
+static void
+npt_defer_ship(void *self, struct npt_d3d11_buffer *b, uint64_t lo, uint64_t hi)
+{
+   struct npt_d3d11_buffer_aux *aux = npt_d3d11_buffer_get_aux(b);
+   if (!aux || !aux->pend_dirty)
+      return;
+   const uint32_t width = npt_d3d11_buffer_get_byte_width(b);
+   if (hi > width) hi = width;
+   if (lo >= hi)
+      return;
+   if (lo >= aux->synced_lo && hi <= aux->synced_hi && !aux->pend_discard) {
+      npt_defer_stats.skipped++;
+      return;
+   }
+   struct npt_ring *ring = npt_com_self_ring(self);
+   const uint32_t slot = npt_d3d11_buffer_get_current_slot(b);
+   const uint32_t flags = NPT_MAP_ACCESS_WRITE |
+      (aux->pend_discard ? NPT_MAP_ACCESS_DISCARD : NPT_MAP_ACCESS_NO_OVERWRITE);
+   uint32_t seqno = 0;
+   npt_dispatch_resource_unmap_range_seqno(ring, ((struct npt_com_base *)self)->base.id,
+                                           ((struct npt_com_base *)b)->base.id, 0,
+                                           npt_d3d11_buffer_get_slot_shmem_res_id(b, slot), width,
+                                           npt_d3d11_buffer_slot_offset(b, slot), flags, lo, hi, &seqno);
+   npt_d3d11_buffer_mark_slot_submitted(b, slot, seqno, ring);
+   aux->pend_discard = false;
+   if (aux->synced_hi > aux->synced_lo && lo <= aux->synced_hi && hi >= aux->synced_lo) {
+      if (lo < aux->synced_lo) aux->synced_lo = (uint32_t)lo;
+      if (hi > aux->synced_hi) aux->synced_hi = (uint32_t)hi;
+   } else {
+      aux->synced_lo = (uint32_t)lo;
+      aux->synced_hi = (uint32_t)hi;
+   }
+   npt_defer_stats.ships++;
+   npt_defer_stats.bytes += hi - lo;
+   if (lo == 0 && hi == width)
+      npt_defer_stats.full++;
+   if (npt_defer_stats.ships % 20000 == 0)
+      npt_log("deferred VB/IB sync: %llu ships, %.1f MiB shipped, %llu whole-buffer, %llu skipped",
+              (unsigned long long)npt_defer_stats.ships, npt_defer_stats.bytes / 1048576.0,
+              (unsigned long long)npt_defer_stats.full, (unsigned long long)npt_defer_stats.skipped);
+}
+
+static void
+npt_defer_ship_all(void *self, struct npt_d3d11_buffer *b)
+{
+   if (b)
+      npt_defer_ship(self, b, 0, npt_d3d11_buffer_get_byte_width(b));
+}
+
+/* Bindings hold no reference (that would change the game's visible refcounts); a destroyed buffer is dropped from
+ * every binding by the destroy hook instead. */
+static void
+npt_defer_track(struct npt_d3d11_buffer **slot, struct npt_d3d11_buffer *b)
+{
+   *slot = b;
+}
+
+static void
+npt_defer_buffer_destroyed(void *buffer)
+{
+   for (unsigned i = 0; i < NPT_DEFER_MAX_CTX; i++) {
+      struct npt_defer_ctx *c = &npt_defer_ctxs[i];
+      if (!c->self)
+         continue;
+      for (unsigned k = 0; k < NPT_DEFER_VB_SLOTS; k++)
+         if ((void *)c->vb[k] == buffer)
+            c->vb[k] = NULL;
+      if ((void *)c->ib == buffer)
+         c->ib = NULL;
+   }
+}
+
+static struct npt_d3d11_buffer *
+npt_defer_pending(struct npt_d3d11_buffer *b)
+{
+   struct npt_d3d11_buffer_aux *aux = b ? npt_d3d11_buffer_get_aux(b) : NULL;
+   return aux && aux->defer == 1 && aux->pend_dirty ? b : NULL;
+}
+
+/* Ships whole every pending buffer bound to the input assembler. */
+static void
+npt_defer_ship_bound_all(void *self, struct npt_defer_ctx *c)
+{
+   for (unsigned i = 0; i < NPT_DEFER_VB_SLOTS; i++)
+      if (npt_defer_pending(c->vb[i]))
+         npt_defer_ship_all(self, c->vb[i]);
+   if (npt_defer_pending(c->ib))
+      npt_defer_ship_all(self, c->ib);
+}
+
+static void
+npt_defer_ship_vertices(void *self, struct npt_defer_ctx *c, uint64_t first, uint64_t count)
+{
+   for (unsigned i = 0; i < NPT_DEFER_VB_SLOTS; i++) {
+      struct npt_d3d11_buffer *b = npt_defer_pending(c->vb[i]);
+      if (!b)
+         continue;
+      const uint64_t stride = c->vb_stride[i], off = c->vb_offset[i];
+      if (!stride) {
+         npt_defer_ship_all(self, b);
+         continue;
+      }
+      /* element 0 too: a per-instance stream of a non-instanced draw reads instance 0 */
+      npt_defer_ship(self, b, off, off + stride);
+      if (count)
+         npt_defer_ship(self, b, off + first * stride, off + (first + count) * stride);
+   }
+}
+
+/* Ships the index range of an indexed draw and returns the vertex range it references (false: unknown). */
+static bool
+npt_defer_index_range(void *self, struct npt_defer_ctx *c, UINT count, UINT start, uint32_t *vmin, uint32_t *vmax)
+{
+   if (!c->ib || !count)
+      return false;
+   const uint32_t isz = c->ib_format == DXGI_FORMAT_R32_UINT ? 4 : c->ib_format == DXGI_FORMAT_R16_UINT ? 2 : 0;
+   if (!isz)
+      return false;
+   struct npt_d3d11_buffer_aux *aux = npt_d3d11_buffer_get_aux(c->ib);
+   if (!aux || aux->defer != 1)
+      return false; /* not a deferred dynamic buffer: its contents are not in guest memory */
+   const uint64_t lo = (uint64_t)c->ib_offset + (uint64_t)start * isz, hi = lo + (uint64_t)count * isz;
+   if (hi > npt_d3d11_buffer_get_byte_width(c->ib))
+      return false;
+   npt_defer_ship(self, c->ib, lo, hi);
+   const uint8_t *p = npt_d3d11_buffer_slot_ptr(c->ib, npt_d3d11_buffer_get_current_slot(c->ib));
+   if (!p)
+      return false;
+   uint32_t mn = UINT32_MAX, mx = 0;
+   if (isz == 2) {
+      const uint16_t *ix = (const uint16_t *)(p + lo);
+      for (UINT k = 0; k < count; k++) { if (ix[k] < mn) mn = ix[k]; if (ix[k] > mx) mx = ix[k]; }
+   } else {
+      const uint32_t *ix = (const uint32_t *)(p + lo);
+      for (UINT k = 0; k < count; k++) { if (ix[k] < mn) mn = ix[k]; if (ix[k] > mx) mx = ix[k]; }
+   }
+   *vmin = mn;
+   *vmax = mx;
+   return true;
+}
+
+static void
+npt_defer_before_draw(void *self, bool indexed, UINT count, UINT start, INT base, bool bounded)
+{
+   struct npt_defer_ctx *c = npt_defer_ctx_get(self, false);
+   if (!c)
+      return;
+   if (!bounded) {
+      npt_defer_ship_bound_all(self, c);
+      return;
+   }
+   if (!indexed) {
+      npt_defer_ship_vertices(self, c, start, count);
+      return;
+   }
+   uint32_t vmin, vmax;
+   if (npt_defer_index_range(self, c, count, start, &vmin, &vmax)) {
+      const int64_t first = (int64_t)base + vmin;
+      if (first >= 0) {
+         npt_defer_ship_vertices(self, c, (uint64_t)first, (uint64_t)vmax - vmin + 1);
+         return;
+      }
+   }
+   npt_defer_ship_bound_all(self, c);
+}
+
+/*
  * WRITE_DISCARD / WRITE_NO_OVERWRITE take the rename-ring fast path
  * (no round-trip; Unmap replays Map+memcpy+Unmap on the host).
  * Other Map types take the sync MAP_RESOURCE path on slot 0.
@@ -74,6 +357,11 @@ ctx_Map_buffer(void *self, struct npt_d3d11_buffer *b, UINT Subresource,
    if (MapType == D3D11_MAP_WRITE_DISCARD ||
        MapType == D3D11_MAP_WRITE_NO_OVERWRITE) {
       const uint32_t flags = npt_d3d11_map_to_access_flags(MapType);
+      if (npt_defer_buffer(self, b)) {
+         struct npt_d3d11_buffer_aux *aux = npt_d3d11_buffer_get_aux(b);
+         aux->synced_lo = aux->synced_hi = 0;
+         if (MapType == D3D11_MAP_WRITE_DISCARD) aux->pend_dirty = false; /* old contents are gone */
+      }
       if (MapType == D3D11_MAP_WRITE_DISCARD)
          npt_d3d11_buffer_rotate_slot(b);
       const uint32_t byte_width = npt_d3d11_buffer_get_byte_width(b);
@@ -212,6 +500,16 @@ ctx_Unmap_buffer(void *self, struct npt_d3d11_buffer *b, UINT Subresource)
    const uint32_t access_flags =
       npt_d3d11_buffer_get_last_map_access_flags(b);
 
+   if (access_flags && npt_defer_buffer(self, b)) {
+      struct npt_d3d11_buffer_aux *aux = npt_d3d11_buffer_get_aux(b);
+      aux->pend_dirty = true;
+      if (access_flags & NPT_MAP_ACCESS_DISCARD)
+         aux->pend_discard = true;
+      npt_d3d11_buffer_set_is_mapped(b, false);
+      npt_d3d11_buffer_set_last_map_access_flags(b, 0);
+      return;
+   }
+
    uint32_t seqno = 0;
    npt_dispatch_resource_unmap_seqno(ring,
       ((struct npt_com_base *)self)->base.id,
@@ -264,6 +562,200 @@ ctx_Unmap_texture(void *self, struct npt_d3d11_texture *t)
    npt_d3d11_texture_clear_mapped_state(t);
 }
 
+/*
+ * SailOver: a copy whose source texture is still mapped. Rocket League (Scaleform glyph cache) maps a staging texture
+ * with D3D11_MAP_WRITE, writes glyphs, copies it to the glyph texture and maps it again, without an Unmap in between.
+ * On Windows the copy reads the staging memory the game just wrote. Here the written bytes only live in the guest
+ * map slot until an Unmap ships them, so the copy read stale host contents and glyphs went missing. Ship the slot to
+ * the host before the copy, and keep the game's mapping valid: later writes go out with the next flush or Unmap
+ * (the rename-replay path: host Map + memcpy + Unmap).
+ */
+static void
+ctx_flush_mapped_source(void *self, ID3D11Resource *src)
+{
+   /* NPT_FLUSH_MAPPED_COPY=0 turns this off (A/B tests). The main menu freeze first blamed on it (runs
+    * 20261003T014348 to 022545) was a lost unlock in nptunix.so, fixed in LKD (mm/watch.c retry bound). */
+   static int enabled = -1;
+   if (enabled < 0) {
+      const char *e = getenv("NPT_FLUSH_MAPPED_COPY");
+      enabled = !(e && e[0] == '0');
+   }
+   if (!enabled)
+      return;
+   npt_defer_ship_all(self, npt_defer_pending(npt_d3d11_buffer_cast(src)));
+   struct npt_d3d11_texture *t = npt_d3d11_texture_cast(src);
+   if (!t || !npt_d3d11_texture_get_is_mapped(t))
+      return;
+   const uint32_t sub = npt_d3d11_texture_get_last_map_subresource(t);
+   const uint32_t bytes = npt_d3d11_texture_get_last_map_byte_size(t);
+   const uint32_t flags = npt_d3d11_texture_get_last_map_access_flags(t);
+   const uint32_t pitch = npt_d3d11_texture_get_cached_row_pitch(t);
+   static unsigned n;
+   if (n++ < 5)
+      npt_log("copy from mapped texture %p (sub %u, %u bytes, flags 0x%x): flushing the map slot first", src, sub,
+              bytes, flags);
+   ctx_Unmap_texture(self, t);
+   npt_d3d11_texture_set_mapped_state(t, sub, pitch, bytes, flags ? flags : NPT_MAP_ACCESS_WRITE);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_CopySubresourceRegion_override(void *self, ID3D11Resource *pDstResource, UINT DstSubresource, UINT DstX,
+                                   UINT DstY, UINT DstZ, ID3D11Resource *pSrcResource, UINT SrcSubresource,
+                                   const D3D11_BOX *pSrcBox)
+{
+   { /* SailOver diag */
+      static unsigned nd;
+      struct npt_d3d11_texture *td = npt_d3d11_texture_cast(pDstResource), *ts = npt_d3d11_texture_cast(pSrcResource);
+      if ((td || ts) && nd++ < 120)
+         npt_log("diag: CSR dst %p(tex %d mapped %d) sub %u at %u,%u src %p(tex %d mapped %d) sub %u box %s %u,%u-%u,%u",
+                 pDstResource, !!td, td ? npt_d3d11_texture_get_is_mapped(td) : 0, DstSubresource, DstX, DstY,
+                 pSrcResource, !!ts, ts ? npt_d3d11_texture_get_is_mapped(ts) : 0, SrcSubresource,
+                 pSrcBox ? "yes" : "no", pSrcBox ? pSrcBox->left : 0, pSrcBox ? pSrcBox->top : 0,
+                 pSrcBox ? pSrcBox->right : 0, pSrcBox ? pSrcBox->bottom : 0);
+   }
+   if ((npt_trace_staging_interesting(pSrcResource) || npt_trace_staging_interesting(pDstResource)) &&
+       npt_trace_staging_take()) {
+      char a[64], b[64];
+      npt_log("stg: ctx %p CSR dst %s sub %u at %u,%u <- src %s sub %u box %s %u,%u-%u,%u", self,
+              npt_trace_res(pDstResource, a, sizeof a), DstSubresource, DstX, DstY, npt_trace_res(pSrcResource, b, sizeof b),
+              SrcSubresource, pSrcBox ? "yes" : "no", pSrcBox ? pSrcBox->left : 0, pSrcBox ? pSrcBox->top : 0,
+              pSrcBox ? pSrcBox->right : 0, pSrcBox ? pSrcBox->bottom : 0);
+   }
+   ctx_flush_mapped_source(self, pSrcResource);
+   ctx_flush_mapped_source(self, pDstResource);
+   npt_id3d11devicecontext_default_CopySubresourceRegion(self, pDstResource, DstSubresource, DstX, DstY, DstZ,
+                                                         pSrcResource, SrcSubresource, pSrcBox);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_CopySubresourceRegion1_override(void *self, ID3D11Resource *pDstResource, UINT DstSubresource, UINT DstX,
+                                    UINT DstY, UINT DstZ, ID3D11Resource *pSrcResource, UINT SrcSubresource,
+                                    const D3D11_BOX *pSrcBox, UINT CopyFlags)
+{
+   ctx_flush_mapped_source(self, pSrcResource);
+   ctx_flush_mapped_source(self, pDstResource);
+   npt_id3d11devicecontext1_default_CopySubresourceRegion1(self, pDstResource, DstSubresource, DstX, DstY, DstZ,
+                                                           pSrcResource, SrcSubresource, pSrcBox, CopyFlags);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_CopyResource_override(void *self, ID3D11Resource *pDstResource, ID3D11Resource *pSrcResource)
+{
+   { /* SailOver diag */
+      static unsigned nd;
+      struct npt_d3d11_texture *td = npt_d3d11_texture_cast(pDstResource), *ts = npt_d3d11_texture_cast(pSrcResource);
+      if ((td || ts) && nd++ < 120)
+         npt_log("diag: CR dst %p(tex %d mapped %d) src %p(tex %d mapped %d)", pDstResource, !!td,
+                 td ? npt_d3d11_texture_get_is_mapped(td) : 0, pSrcResource, !!ts,
+                 ts ? npt_d3d11_texture_get_is_mapped(ts) : 0);
+   }
+   if ((npt_trace_staging_interesting(pSrcResource) || npt_trace_staging_interesting(pDstResource)) &&
+       npt_trace_staging_take()) {
+      char a[64], b[64];
+      npt_log("stg: ctx %p CR dst %s <- src %s", self, npt_trace_res(pDstResource, a, sizeof a),
+              npt_trace_res(pSrcResource, b, sizeof b));
+   }
+   ctx_flush_mapped_source(self, pSrcResource);
+   ctx_flush_mapped_source(self, pDstResource);
+   npt_id3d11devicecontext_default_CopyResource(self, pDstResource, pSrcResource);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_IASetVertexBuffers_override(void *self, UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppVertexBuffers,
+                                const UINT *pStrides, const UINT *pOffsets)
+{
+   struct npt_defer_ctx *c = npt_defer_enabled() ? npt_defer_ctx_get(self, true) : NULL;
+   if (c)
+      for (UINT i = 0; i < NumBuffers && StartSlot + i < NPT_DEFER_VB_SLOTS; i++) {
+         struct npt_d3d11_buffer *b = ppVertexBuffers ? npt_d3d11_buffer_cast(ppVertexBuffers[i]) : NULL;
+         npt_defer_track(&c->vb[StartSlot + i], b);
+         c->vb_stride[StartSlot + i] = pStrides ? pStrides[i] : 0;
+         c->vb_offset[StartSlot + i] = pOffsets ? pOffsets[i] : 0;
+      }
+   npt_id3d11devicecontext_default_IASetVertexBuffers(self, StartSlot, NumBuffers, ppVertexBuffers,
+                                                      pStrides, pOffsets);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_IASetIndexBuffer_override(void *self, ID3D11Buffer *pIndexBuffer, DXGI_FORMAT Format, UINT Offset)
+{
+   struct npt_defer_ctx *c = npt_defer_enabled() ? npt_defer_ctx_get(self, true) : NULL;
+   if (c) {
+      npt_defer_track(&c->ib, npt_d3d11_buffer_cast(pIndexBuffer));
+      c->ib_format = Format;
+      c->ib_offset = Offset;
+   }
+   npt_id3d11devicecontext_default_IASetIndexBuffer(self, pIndexBuffer, Format, Offset);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_ClearState_override(void *self)
+{
+   struct npt_defer_ctx *c = npt_defer_ctx_get(self, false);
+   if (c) {
+      for (unsigned i = 0; i < NPT_DEFER_VB_SLOTS; i++)
+         npt_defer_track(&c->vb[i], NULL);
+      npt_defer_track(&c->ib, NULL);
+   }
+   npt_id3d11devicecontext_default_ClearState(self);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_Draw_override(void *self, UINT VertexCount, UINT StartVertexLocation)
+{
+   npt_defer_before_draw(self, false, VertexCount, StartVertexLocation, 0, true);
+   npt_id3d11devicecontext_default_Draw(self, VertexCount, StartVertexLocation);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_DrawIndexed_override(void *self, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
+{
+   npt_defer_before_draw(self, true, IndexCount, StartIndexLocation, BaseVertexLocation, true);
+   npt_id3d11devicecontext_default_DrawIndexed(self, IndexCount, StartIndexLocation, BaseVertexLocation);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_DrawInstanced_override(void *self, UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation,
+                           UINT StartInstanceLocation)
+{
+   npt_defer_before_draw(self, false, VertexCountPerInstance, StartVertexLocation, 0,
+                         InstanceCount <= 1 && !StartInstanceLocation);
+   npt_id3d11devicecontext_default_DrawInstanced(self, VertexCountPerInstance, InstanceCount, StartVertexLocation,
+                                                 StartInstanceLocation);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_DrawIndexedInstanced_override(void *self, UINT IndexCountPerInstance, UINT InstanceCount,
+                                  UINT StartIndexLocation, INT BaseVertexLocation, UINT StartInstanceLocation)
+{
+   npt_defer_before_draw(self, true, IndexCountPerInstance, StartIndexLocation, BaseVertexLocation,
+                         InstanceCount <= 1 && !StartInstanceLocation);
+   npt_id3d11devicecontext_default_DrawIndexedInstanced(self, IndexCountPerInstance, InstanceCount,
+                                                        StartIndexLocation, BaseVertexLocation,
+                                                        StartInstanceLocation);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_DrawAuto_override(void *self)
+{
+   npt_defer_before_draw(self, false, 0, 0, 0, false);
+   npt_id3d11devicecontext_default_DrawAuto(self);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_DrawIndexedInstancedIndirect_override(void *self, ID3D11Buffer *pBufferForArgs, UINT AlignedByteOffsetForArgs)
+{
+   npt_defer_before_draw(self, true, 0, 0, 0, false);
+   npt_id3d11devicecontext_default_DrawIndexedInstancedIndirect(self, pBufferForArgs, AlignedByteOffsetForArgs);
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_DrawInstancedIndirect_override(void *self, ID3D11Buffer *pBufferForArgs, UINT AlignedByteOffsetForArgs)
+{
+   npt_defer_before_draw(self, false, 0, 0, 0, false);
+   npt_id3d11devicecontext_default_DrawInstancedIndirect(self, pBufferForArgs, AlignedByteOffsetForArgs);
+}
+
 /* Resources without a wrapper fall through to E_NOTIMPL / no-op. */
 static HRESULT NPT_STDMETHODCALLTYPE
 ctx_Map_override(void *self, ID3D11Resource *pResource, UINT Subresource,
@@ -279,9 +771,20 @@ ctx_Map_override(void *self, ID3D11Resource *pResource, UINT Subresource,
                             pMappedResource);
 
    struct npt_d3d11_texture *t = npt_d3d11_texture_cast(pResource);
-   if (t)
-      return ctx_Map_texture(self, t, Subresource, MapType, MapFlags,
-                             pMappedResource);
+   if (t) {
+      const int was_mapped = npt_d3d11_texture_get_is_mapped(t);
+      HRESULT hr = ctx_Map_texture(self, t, Subresource, MapType, MapFlags, pMappedResource);
+      if (npt_trace_staging_interesting(pResource) && npt_trace_staging_take())
+         npt_log("stg: ctx %p Map tex %p(u%u) sub %u type %u flags 0x%x was_mapped %d -> 0x%x data %p pitch %u", self,
+                 pResource, npt_d3d11_texture_get_usage(t), Subresource, (unsigned)MapType, MapFlags, was_mapped,
+                 (unsigned)hr, pMappedResource->pData, pMappedResource->RowPitch);
+      static int n; /* SailOver diag */
+      if (n < 60 || !(n % 500))
+         npt_log("diag: Map res %p sub %u type %u flags 0x%x -> 0x%x data %p pitch %u", pResource, Subresource,
+                 (unsigned)MapType, MapFlags, (unsigned)hr, pMappedResource->pData, pMappedResource->RowPitch);
+      n++;
+      return hr;
+   }
 
    return NPT_E_NOTIMPL;
 }
@@ -299,6 +802,16 @@ ctx_Unmap_override(void *self, ID3D11Resource *pResource, UINT Subresource)
    }
 
    struct npt_d3d11_texture *t = npt_d3d11_texture_cast(pResource);
+   if (t && npt_trace_staging_take())
+      npt_log("stg: ctx %p Unmap tex %p(u%u m%d) sub %u", self, pResource, npt_d3d11_texture_get_usage(t),
+              npt_d3d11_texture_get_is_mapped(t), Subresource);
+   { /* SailOver diag: texture unmaps */
+      static int n;
+      if (n < 60 || !(n % 500))
+         npt_log("diag: Unmap res %p tex %p sub %u mapped %d flags 0x%x", pResource, t, Subresource,
+                 t ? npt_d3d11_texture_get_is_mapped(t) : -1, t ? npt_d3d11_texture_get_last_map_access_flags(t) : 0);
+      n++;
+   }
    if (t && npt_d3d11_texture_get_is_mapped(t))
       ctx_Unmap_texture(self, t);
 }
@@ -319,6 +832,24 @@ ctx_UpdateSubresource_override(void *self, ID3D11Resource *pDstResource,
 {
    if (!pDstResource || !pSrcData)
       return;
+   {
+      struct npt_d3d11_texture *tt = npt_d3d11_texture_cast(pDstResource);
+      const struct npt_d3d11_texture_aux *ax = tt ? npt_d3d11_texture_get_aux_const(tt) : NULL;
+      if (ax && (pDstBox || ax->bytes_per_pixel == 1) && npt_trace_staging_take()) {
+         /* rows x row bytes actually covered, and how many of those source bytes are non-zero */
+         const uint32_t w = pDstBox ? pDstBox->right - pDstBox->left : ax->width;
+         const uint32_t h = pDstBox ? pDstBox->bottom - pDstBox->top : ax->height;
+         uint64_t nz = 0;
+         for (uint32_t y = 0; y < h && y < 4096; y++)
+            for (uint32_t x = 0; x < w * ax->bytes_per_pixel && x < 16384; x++)
+               nz += ((const uint8_t *)pSrcData)[(size_t)y * SrcRowPitch + x] != 0;
+         npt_log("stg: ctx %p UpdateSubresource dst tex %p %ux%u fmt %u u%u sub %u box %s %u,%u-%u,%u pitch %u src %p "
+                 "nonzero %llu", self, pDstResource, ax->width, ax->height, (unsigned)ax->format, ax->usage,
+                 DstSubresource, pDstBox ? "yes" : "no", pDstBox ? pDstBox->left : 0, pDstBox ? pDstBox->top : 0,
+                 pDstBox ? pDstBox->right : 0, pDstBox ? pDstBox->bottom : 0, SrcRowPitch, pSrcData,
+                 (unsigned long long)nz);
+      }
+   }
 
    /* MSDN: an empty box -- top >= bottom, left >= right, or
     * front >= back -- is a no-op.  Return before the unsigned box
@@ -521,6 +1052,20 @@ npt_overrides_d3d11_context_init(void)
 {
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(Map,   ctx_Map_override);
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(Unmap, ctx_Unmap_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(CopySubresourceRegion, ctx_CopySubresourceRegion_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT1(CopySubresourceRegion1, ctx_CopySubresourceRegion1_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(CopyResource, ctx_CopyResource_override);
+   npt_d3d11_buffer_destroy_hook = npt_defer_buffer_destroyed;
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(IASetVertexBuffers, ctx_IASetVertexBuffers_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(IASetIndexBuffer, ctx_IASetIndexBuffer_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(ClearState, ctx_ClearState_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(Draw, ctx_Draw_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(DrawIndexed, ctx_DrawIndexed_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(DrawInstanced, ctx_DrawInstanced_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(DrawIndexedInstanced, ctx_DrawIndexedInstanced_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(DrawAuto, ctx_DrawAuto_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(DrawIndexedInstancedIndirect, ctx_DrawIndexedInstancedIndirect_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(DrawInstancedIndirect, ctx_DrawInstancedIndirect_override);
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT (UpdateSubresource,
                                                ctx_UpdateSubresource_override);
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT1(UpdateSubresource1,

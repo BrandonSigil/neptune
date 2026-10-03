@@ -44,6 +44,11 @@
  * host GPU; the latency ring above is the pacing bound. */
 #define NPT_SC_WSI_QUEUE_SIZE 8u
 
+/* SailOver: frames a Present may leave queued ahead of the display (0 = no limit). */
+struct npt_guest_swapchain_common;
+unsigned npt_gsc_present_queue_limit(void);
+void npt_gsc_display_backpressure_wait(struct npt_guest_swapchain_common *c);
+
 /* Reuse-gate budget: how long Present waits for the compositor to
  * release the next pool image before proceeding anyway (a minimized
  * window never idles). */
@@ -111,6 +116,8 @@ struct npt_guest_swapchain_common {
    cnd_t wsi_cond;
    struct npt_gsc_present_entry wsi_queue[NPT_SC_WSI_QUEUE_SIZE];
    uint32_t wsi_head, wsi_tail;
+   /* SailOver: presents the WSI worker has handed to the display (after its fence and pacing waits) */
+   uint32_t wsi_done;
    _Atomic int wsi_thread_exit;
    bool wsi_thread_started;
    HANDLE wsi_thread;

@@ -224,6 +224,9 @@ void npt_d3d11_texture_mark_slot_submitted(struct npt_d3d11_texture *t,
  * uses it; non-zero => host replays Map+memcpy+Unmap with these
  * flags (cached-pitch fast path). */
 bool npt_d3d11_texture_get_is_mapped(const struct npt_d3d11_texture *t);
+uint32_t npt_d3d11_texture_get_usage(const struct npt_d3d11_texture *t);
+struct npt_d3d11_texture_aux;
+const struct npt_d3d11_texture_aux *npt_d3d11_texture_get_aux_const(const struct npt_d3d11_texture *t);
 void npt_d3d11_texture_set_mapped_state(struct npt_d3d11_texture *t,
                                         uint32_t subresource,
                                         uint32_t row_pitch,
@@ -293,7 +296,18 @@ struct npt_d3d11_buffer_aux {
    D3D11_BUFFER_DESC desc;
    bool has_desc;
    struct npt_d3d_map_ring map_ring;
+   /* SailOver: deferred sync of dynamic vertex/index buffers (see npt_overrides_d3d11_context.c).
+    * defer: -1 not decided yet, 0 never deferred, 1 deferred. pend_dirty: the current slot holds writes the host may
+    * not have; pend_discard: the next ship must rename the host buffer first; [synced_lo, synced_hi): bytes shipped
+    * since the last Map. */
+   int8_t defer;
+   bool pend_dirty, pend_discard;
+   uint32_t synced_lo, synced_hi;
 };
+
+struct npt_d3d11_buffer_aux *npt_d3d11_buffer_get_aux(struct npt_d3d11_buffer *b);
+/* SailOver: called with the wrapper when a buffer is destroyed (drops it from the deferred-sync bindings). */
+extern void (*npt_d3d11_buffer_destroy_hook)(void *buffer);
 
 void npt_d3d11_buffer_aux_init(struct npt_com_base *com,
                                struct npt_device *dev, uint64_t host_id);

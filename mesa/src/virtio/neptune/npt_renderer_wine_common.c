@@ -60,6 +60,18 @@ static int unixlib_wsi_init(uint32_t num_images, const int *fds,
     * X11 window (composition swapchains, message-only windows, drivers
     * other than winex11). */
    uint32_t x11_window = 0;
+#ifdef NPT_WSI_WSD
+   /* SailOver: winesailover.drv publishes the wsd window id of each top-level HWND under this property; the
+    * swapchain of a child window presents into its top-level window. The value travels in x11_window. */
+   if (hwnd) {
+      HWND top = GetAncestor(hwnd, GA_ROOT);
+      x11_window = (uint32_t)(uintptr_t)GetPropW(top ? top : hwnd, L"__wine_sailover_window");
+   }
+   if (!x11_window) {
+      npt_log("unixlib_wsi_init: no wsd window for hwnd %p", (void *)hwnd);
+      return -1;
+   }
+#else
    if (hwnd) {
       HANDLE prop = GetPropW(hwnd, L"__wine_x11_whole_window");
       x11_window = (uint32_t)(uintptr_t)prop;
@@ -68,6 +80,7 @@ static int unixlib_wsi_init(uint32_t num_images, const int *fds,
       npt_log("unixlib_wsi_init: no X11 window for hwnd %p", (void *)hwnd);
       return -1;
    }
+#endif
 
    struct npt_unix_wsi_init_params p;
    memset(&p, 0, sizeof(p));

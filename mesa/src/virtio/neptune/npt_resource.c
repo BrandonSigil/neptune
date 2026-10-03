@@ -276,10 +276,14 @@ buf_aux(const struct npt_d3d11_buffer *b)
    return b ? ((struct npt_com_base *)b)->aux : NULL;
 }
 
+void (*npt_d3d11_buffer_destroy_hook)(void *buffer);
+
 static void
 npt_d3d11_buffer_aux_destroy(void *aux_raw)
 {
    struct npt_d3d11_buffer_aux *aux = aux_raw;
+   if (npt_d3d11_buffer_destroy_hook)
+      npt_d3d11_buffer_destroy_hook(aux->com);
    npt_d3d_map_ring_fini(&aux->map_ring);
    free(aux);
 }
@@ -292,7 +296,14 @@ npt_d3d11_buffer_aux_init(struct npt_com_base *com,
    aux->com = com;
    npt_d3d_map_ring_init(&aux->map_ring, com);
    com->aux_destroy = npt_d3d11_buffer_aux_destroy;
+   aux->defer = -1;
    (void)dev; (void)host_id;
+}
+
+struct npt_d3d11_buffer_aux *
+npt_d3d11_buffer_get_aux(struct npt_d3d11_buffer *b)
+{
+   return buf_aux(b);
 }
 
 struct npt_d3d11_buffer *
@@ -929,6 +940,12 @@ npt_d3d11_texture_ensure_map_shmem(struct npt_d3d11_texture *t)
    }
    return npt_d3d_map_ring_alloc_shmem(&aux->map_ring, (uint32_t)aligned_slot);
 }
+
+const struct npt_d3d11_texture_aux *npt_d3d11_texture_get_aux_const(const struct npt_d3d11_texture *t)
+{ return tex_aux(t); }
+
+uint32_t npt_d3d11_texture_get_usage(const struct npt_d3d11_texture *t)
+{ const struct npt_d3d11_texture_aux *aux = tex_aux(t); return aux ? aux->usage : 0; }
 
 uint32_t npt_d3d11_texture_get_map_shmem_res_id(const struct npt_d3d11_texture *t)
 { const struct npt_d3d11_texture_aux *aux = tex_aux(t); return aux ? npt_d3d_map_ring_slot_res_id(&aux->map_ring, 0) : 0; }

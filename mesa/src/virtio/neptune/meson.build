@@ -103,6 +103,9 @@ if npt_is_windows
       'npt_common_wine.c',
     )
     npt_c_args += ['-D__WINE__']
+    if get_option('npt_wsi') == 'wsd'
+      npt_c_args += ['-DNPT_WSI_WSD']
+    endif
   else
     npt_common_src += files(
       'npt_renderer_vtest_protocol.c',

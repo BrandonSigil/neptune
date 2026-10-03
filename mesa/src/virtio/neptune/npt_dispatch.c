@@ -150,6 +150,24 @@ npt_dispatch_resource_unmap(struct npt_ring *ring, uint64_t context_id,
    return npt_ring_submit_raw(ring, &cmd, sizeof(cmd));
 }
 
+/* SailOver: D3D11 rename-replay unmap that ships only [range_begin, range_end) of the slot (the host maps the
+ * resource with access_flags and copies that byte range to the same offset). */
+bool
+npt_dispatch_resource_unmap_range_seqno(struct npt_ring *ring, uint64_t context_id,
+                                        uint64_t resource_id, uint32_t subresource,
+                                        uint32_t shmem_res_id, uint64_t byte_size,
+                                        uint32_t shmem_offset, uint32_t access_flags,
+                                        uint64_t range_begin, uint64_t range_end,
+                                        uint32_t *out_seqno)
+{
+   struct npt_cmd_unmap_resource cmd;
+   fill_unmap_cmd(&cmd, context_id, resource_id, subresource, shmem_res_id,
+                  byte_size, shmem_offset, access_flags);
+   cmd.written_range_begin = range_begin;
+   cmd.written_range_end = range_end;
+   return npt_ring_submit_raw_seqno(ring, &cmd, sizeof(cmd), out_seqno);
+}
+
 bool
 npt_dispatch_resource_unmap_seqno(struct npt_ring *ring, uint64_t context_id,
                                   uint64_t resource_id, uint32_t subresource,

@@ -299,6 +299,7 @@ gsc_present_common(void *self, UINT SyncInterval, UINT Flags)
    }
    if (prof) t2 = npt_profile_now_ns();
 
+   npt_gsc_display_backpressure_wait(c);
    atomic_fetch_add(&c->image_inflight[i], 1);
    npt_gsc_wsi_push(c, i, wait_fence_fd, token);
 

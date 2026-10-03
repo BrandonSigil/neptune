@@ -45,6 +45,7 @@
 #     meson setup -Dbuild.pkg_config_path=/path/to/sysroot/lib/pkgconfig builddir-win64
 # (cross builds don't propagate PKG_CONFIG_PATH from the calling env to the
 # build-machine pkg-config; the `build.` prefix targets the build machine.)
+if get_option('npt_wsi') == 'x11'
 npt_dep_xcb_dri3_new = dependency('xcb-dri3',
                                    version : '>= 1.16', native : true,
                                    required : false)
@@ -94,6 +95,8 @@ libnptunix = shared_library(
   # and the run scripts copy from the build dir directly anyway.
   install : false,
 )
+
+endif # npt_wsi == x11
 
 if npt_is_windows
   # ----- nptunix.dll (PE carrier, marker-patched) -----

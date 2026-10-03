@@ -209,6 +209,10 @@ npt_gsc_wsi_thread(LPVOID arg)
       /* Owned by entry now; the backend closes/consumes the fd. */
       npt_renderer_wsi_present(renderer, entry.image_index,
                                entry.wait_fence_fd);
+      mtx_lock(&c->wsi_mutex);
+      c->wsi_done++;
+      cnd_broadcast(&c->wsi_cond);
+      mtx_unlock(&c->wsi_mutex);
       if (entry.token)
          npt_event_release_token(dev, entry.token);
       npt_gsc_frame_latency_release(c);
@@ -224,6 +228,7 @@ npt_gsc_wsi_start(struct npt_guest_swapchain_common *c)
    atomic_store_explicit(&c->wsi_thread_exit, 0, memory_order_release);
    c->wsi_head = 0;
    c->wsi_tail = 0;
+   c->wsi_done = 0;
    c->wsi_thread = CreateThread(NULL, 0, npt_gsc_wsi_thread, c, 0, NULL);
    if (!c->wsi_thread) {
       npt_log("%s: WSI worker CreateThread failed err=%lu", c->tag,
@@ -946,3 +951,33 @@ npt_gsc_SetHDRMetaData(void *self, DXGI_HDR_METADATA_TYPE Type, UINT Size,
 }
 
 #endif /* __WINE__ */
+
+/* SailOver: input latency. The DXGI default lets a game queue three frames; when the display (vsync pacing) or the
+ * host renderer is the bottleneck those frames wait in the WSI queue and every input reaches the screen three frames
+ * late. NPT_PRESENT_QUEUE=<n> makes Present wait until at most n earlier frames are still on their way to the
+ * display (n = 1: the game samples input for frame N+2 once frame N is on screen). Default 1; 0 disables. */
+unsigned
+npt_gsc_present_queue_limit(void)
+{
+   static int limit = -1;
+   if (limit < 0) {
+      char buf[16];
+      DWORD n = GetEnvironmentVariableA("NPT_PRESENT_QUEUE", buf, sizeof(buf));
+      limit = (n > 0 && n < sizeof(buf)) ? atoi(buf) : 1;
+      npt_log("present queue limit %d", limit);
+   }
+   return (unsigned)limit;
+}
+
+void
+npt_gsc_display_backpressure_wait(struct npt_guest_swapchain_common *c)
+{
+   const unsigned limit = npt_gsc_present_queue_limit();
+   if (!limit || !c->wsi_thread_started)
+      return;
+   mtx_lock(&c->wsi_mutex);
+   while ((uint32_t)(c->wsi_tail - c->wsi_done) >= limit &&
+          !atomic_load_explicit(&c->wsi_thread_exit, memory_order_acquire))
+      cnd_wait(&c->wsi_cond, &c->wsi_mutex);
+   mtx_unlock(&c->wsi_mutex);
+}
