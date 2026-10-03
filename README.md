@@ -1,6 +1,6 @@
 # neptune
 
-The Direct3D path of Voile's Linux engine ([voile-ldk](https://github.com/Zagrios/voile-ldk)): UTM's Neptune, a
+The Direct3D path of Voile's Linux engine ([voile-lkd](https://github.com/Zagrios/voile-lkd)): UTM's Neptune, a
 D3D11/DXGI/D3D12 driver for Windows guests that replays every call on the host, adapted to run in Wine for Linux on
 macOS. Private.
 
