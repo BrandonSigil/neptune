@@ -217,15 +217,23 @@ static void vtest_write_implicit_fence(UNUSED void *cookie, uint32_t fence_id_in
 }
 
 static void vtest_signal_timeline(struct vtest_timeline *timeline,
-                                  struct vtest_timeline_submit *to_submit);
+                                  struct vtest_timeline_submit *to_submit,
+                                  bool exact);
 
+/* SailOver: Neptune splits the timelines it is offered (VTEST_MAX_TIMELINE_COUNT) in two, and its upper half carries
+ * Win32 event proxies and per-Present GPU-done tokens, round-robin (npt_renderer_event_ring_base in the guest). Each of
+ * those fences retires on its own, when its event fires, in any order: a retirement must not take the earlier
+ * submits of the ring with it. It did, and a Win32 event armed after a Present on the same ring signalled that
+ * Present's GPU-done fence before the copy into the swapchain image had run: wsd then showed the image's previous
+ * content, three frames old, for one frame (Rocket League, frame-back detector of wsd). The lower half keeps the
+ * in-order rule of GPU rings, whose mergeable fences may retire only the newest. */
 static void vtest_write_context_fence(UNUSED void *cookie,
                                       UNUSED uint32_t ctx_id,
-                                      UNUSED uint32_t ring_idx,
+                                      uint32_t ring_idx,
                                       uint64_t fence_id)
 {
    struct vtest_timeline_submit *submit = (void*)(uintptr_t)fence_id;
-   vtest_signal_timeline(submit->timeline, submit);
+   vtest_signal_timeline(submit->timeline, submit, ring_idx >= VTEST_MAX_TIMELINE_COUNT / 2);
 }
 
 static int vtest_get_drm_fd(void *cookie)
@@ -1968,13 +1976,16 @@ static void vtest_signal_sync(struct vtest_sync *sync, uint64_t value)
 }
 
 static void vtest_signal_timeline(struct vtest_timeline *timeline,
-                                  struct vtest_timeline_submit *to_submit)
+                                  struct vtest_timeline_submit *to_submit,
+                                  bool exact)
 {
    struct vtest_timeline_submit *submit, *tmp;
 
    LIST_FOR_EACH_ENTRY_SAFE(submit, tmp, &timeline->submits, head) {
       uint32_t i;
 
+      if (exact && submit != to_submit)
+         continue;
       list_del(&submit->head);
 
       for (i = 0; i < submit->count; i++) {
