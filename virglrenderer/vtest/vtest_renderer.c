@@ -105,6 +105,10 @@ struct vtest_timeline_submit {
    uint32_t count;
    struct vtest_sync **syncs;
    uint64_t *values;
+
+   /* Darwin: write end of the pipe whose read end was sent as OUT_FENCE_FD.
+    * One byte is written when the context fence retires (-1 if unused). */
+   int out_fence_wr;
 };
 
 struct vtest_sync_wait {
@@ -331,6 +335,8 @@ static void vtest_free_timeline_submit(struct vtest_timeline_submit *submit)
    uint32_t i;
    for (i = 0; i < submit->count; i++)
       vtest_unref_sync(submit->syncs[i]);
+   if (submit->out_fence_wr >= 0)
+      close(submit->out_fence_wr);
    free(submit);
 }
 
@@ -961,7 +967,7 @@ int vtest_get_param(UNUSED uint32_t length_dw)
    case VCMD_PARAM_MAX_TIMELINE_COUNT:
       resp[0] = true;
       /* TODO until we have a timerfd */
-#ifdef HAVE_EVENTFD_H
+#if defined(HAVE_EVENTFD_H) || defined(__APPLE__)
       if (!getenv("VIRGL_DISABLE_MT"))
          resp[1] = VTEST_MAX_TIMELINE_COUNT;
 #endif
@@ -1975,6 +1981,11 @@ static void vtest_signal_timeline(struct vtest_timeline *timeline,
          vtest_signal_sync(submit->syncs[i], submit->values[i]);
          vtest_unref_sync(submit->syncs[i]);
       }
+      if (submit->out_fence_wr >= 0) {
+         char one = 1;
+         (void)write(submit->out_fence_wr, &one, 1);
+         close(submit->out_fence_wr);
+      }
       free(submit);
 
       if (submit == to_submit)
@@ -2330,6 +2341,7 @@ static int vtest_submit_cmd2_batch(struct vtest_context *ctx,
       submit->count = batch->sync_count;
       submit->syncs = (void *)&submit[1];
       submit->values = (void *)&submit->syncs[batch->sync_count];
+      submit->out_fence_wr = -1;
    }
 
    for (i = 0; i < batch->sync_count; i++) {
@@ -2384,6 +2396,18 @@ static int vtest_submit_cmd2_batch(struct vtest_context *ctx,
             fence_fd = eventfd(1, EFD_CLOEXEC | EFD_NONBLOCK);
             if (fence_fd < 0)
                report_failed_call("eventfd(signalled)", -errno);
+#elif defined(__APPLE__)
+            /* No eventfd/sync_file on Darwin: hand out a pipe read end that becomes
+             * readable when the context fence retires (vtest_signal_timeline). */
+            int pfd[2];
+            if (!pipe(pfd)) {
+               fcntl(pfd[0], F_SETFD, FD_CLOEXEC);
+               fcntl(pfd[1], F_SETFD, FD_CLOEXEC);
+               fence_fd = pfd[0];
+               submit->out_fence_wr = pfd[1];
+            } else {
+               report_failed_call("pipe(out fence)", -errno);
+            }
 #endif
          }
          if (batch->flags & VCMD_SUBMIT_CMD2_FLAG_OUT_FENCE_FD)

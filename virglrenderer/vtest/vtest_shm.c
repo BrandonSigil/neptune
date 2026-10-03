@@ -45,6 +45,31 @@ static int vtest_memfd_create(const char *name, unsigned int flags)
 #endif
 }
 
+#ifdef __APPLE__
+/* Darwin has no memfd_create.  Reuse the POSIX shm path of os_create_anonymous_file
+ * (shm_open + shm_unlink + ftruncate, anon_file.c).  The tag must stay short:
+ * shm names are limited to PSHMNAMLEN (31) characters on macOS. */
+#include "mesa/util/anon_file.h"
+
+int vtest_new_shm(uint32_t handle, size_t size)
+{
+   int fd = os_create_anonymous_file((off_t)size, "vt");
+   (void)handle;
+   if (fd < 0)
+      return report_failed_call("os_create_anonymous_file", -errno);
+   return fd;
+}
+
+int vtest_shm_check(void)
+{
+   int fd = os_create_anonymous_file(16384, "vt");
+   if (fd >= 0) {
+      close(fd);
+      return 1;
+   }
+   return 0;
+}
+#else
 int vtest_new_shm(uint32_t handle, size_t size)
 {
    int fd, ret;
@@ -75,3 +100,4 @@ int vtest_shm_check(void)
 
     return 0;
 }
+#endif
