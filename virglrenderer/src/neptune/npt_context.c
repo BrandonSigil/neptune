@@ -6,6 +6,7 @@
 #include "npt_context.h"
 
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -263,6 +264,21 @@ npt_lookup_cache_slot(uint64_t id)
           (NPT_CS_LOOKUP_CACHE_SIZE - 1);
 }
 
+/* SailOver diagnostic: ids that missed a lookup, to report a later (racing) registration of the same id. */
+static _Atomic uint64_t npt_diag_missed[64];
+static _Atomic unsigned npt_diag_missed_pos;
+static void npt_diag_note_miss(uint64_t id)
+{
+   npt_diag_missed[atomic_fetch_add(&npt_diag_missed_pos, 1) % 64] = id;
+}
+static bool npt_diag_was_missed(uint64_t id)
+{
+   for (unsigned i = 0; i < 64; i++)
+      if (npt_diag_missed[i] == id) return true;
+   return false;
+}
+
+
 /* On a non-permissive failure of a nonzero id, sets *miss and leaves
  * the error policy to the caller: npt_context_lookup_object goes
  * decoder-fatal, npt_cs_handle_lookup records a decoder-private miss
@@ -332,8 +348,19 @@ npt_context_lookup_object_impl(struct npt_context *ctx,
               "(expected %u, registered %u)", id,
               (unsigned)expected, (unsigned)actual);
    } else if (!permissive) {
+      bool is_null = false;
+      if (ctx->null_ids) {
+         mtx_lock(&ctx->object_mutex);
+         is_null = _mesa_hash_table_search(ctx->null_ids, &id) != NULL;
+         mtx_unlock(&ctx->object_mutex);
+      }
+      if (is_null) {
+         *miss = false;
+         return NULL;  /* a guest id the host knows as NULL: bind/compare NULL, no fatal miss */
+      }
       npt_log("object table: unregistered id 0x%016" PRIx64
               " (expected type %u)", id, (unsigned)expected);
+      npt_diag_note_miss(id);
    }
 
    *miss = !permissive;
@@ -368,6 +395,18 @@ npt_context_release_object(struct npt_context *ctx, uint64_t guest_id)
    /* Order: feedback_unregister BEFORE IUnknown::Release, otherwise a
     * between-commands poll could call GetData / GetCompletedValue on
     * a freed pointer. */
+   if (npt_diag_was_missed(guest_id))
+      npt_log("diag: COM_RELEASE of id 0x%016" PRIx64 " that a lookup missed", guest_id);
+   if (ctx->null_ids) {
+      mtx_lock(&ctx->object_mutex);
+      struct hash_entry *ne = _mesa_hash_table_search(ctx->null_ids, &guest_id);
+      if (ne) {
+         void *k = (void *)ne->key;
+         _mesa_hash_table_remove(ctx->null_ids, ne);
+         free(k);
+      }
+      mtx_unlock(&ctx->object_mutex);
+   }
    npt_feedback_unregister(ctx, guest_id);
    npt_context_unregister_object(ctx, guest_id);
 
@@ -426,9 +465,26 @@ npt_cs_handle_register_guest_id(struct npt_dispatch_context *dispatch,
                                 void *obj,
                                 npt_object_type type)
 {
-   if (!guest_id || !obj)
+   if (!guest_id)
       return;
    struct npt_context *ctx = npt_context_from_dispatch(dispatch);
+   if (!obj) {
+      /* SailOver: remember that this guest id stands for "nothing" (see null_ids) */
+      if (ctx->null_ids) {
+         uint64_t *key = malloc(sizeof(*key));
+         if (key) {
+            *key = guest_id;
+            mtx_lock(&ctx->object_mutex);
+            if (!_mesa_hash_table_search(ctx->null_ids, key)) _mesa_hash_table_insert(ctx->null_ids, key, NULL);
+            else free(key);
+            mtx_unlock(&ctx->object_mutex);
+         }
+      }
+      return;
+   }
+   if (npt_diag_was_missed(guest_id))
+      npt_log("object table: id 0x%016" PRIx64 " (type %u) registered AFTER a lookup missed it (ordering race)",
+              guest_id, (unsigned)type);
    npt_context_register_object(ctx, guest_id, obj, type);
 }
 
@@ -507,6 +563,7 @@ npt_context_create(uint32_t ctx_id,
       _mesa_hash_table_create(NULL, hash_uint64, equal_uint64);
    if (!ctx->object_table)
       goto err_object_table;
+   ctx->null_ids = _mesa_hash_table_create(NULL, hash_uint64, equal_uint64);
 
    if (npt_cs_encoder_init(&ctx->encoder, &ctx->cs_fatal_error))
       goto err_encoder;

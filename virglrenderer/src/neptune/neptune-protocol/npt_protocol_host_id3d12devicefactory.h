@@ -615,7 +615,7 @@ npt_dispatch_ID3D12DeviceFactory_GetConfigurationInterface(struct npt_dispatch_c
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppv && *args.ppv)
+    if (args.ppv) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppv, *args.ppv,
             npt_object_type_from_iid(args.iid));
 

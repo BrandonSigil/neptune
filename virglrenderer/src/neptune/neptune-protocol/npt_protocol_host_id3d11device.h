@@ -1401,6 +1401,9 @@ npt_dispatch_ID3D11Device_CreateInputLayout(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
+    /* SailOver diagnostic: a failed creation leaves the guest id unregistered (later "argument handle is unknown") */
+    if ((int32_t)args.ret < 0 || !args.ppInputLayout || !*args.ppInputLayout)
+        npt_log("CreateInputLayout failed: hr 0x%08x guest id 0x%016" PRIx64, (unsigned)args.ret, (uint64_t)args._guest_id_ppInputLayout);
     if (args.ppInputLayout && *args.ppInputLayout)
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppInputLayout, *args.ppInputLayout, NPT_OBJECT_TYPE_ID3D11INPUTLAYOUT);
 
@@ -1556,6 +1559,9 @@ npt_dispatch_ID3D11Device_CreateVertexShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
+    /* SailOver diagnostic: a failed creation leaves the guest id unregistered (later "argument handle is unknown") */
+    if ((int32_t)args.ret < 0 || !args.ppVertexShader || !*args.ppVertexShader)
+        npt_log("CreateVertexShader failed: hr 0x%08x guest id 0x%016" PRIx64, (unsigned)args.ret, (uint64_t)args._guest_id_ppVertexShader);
     if (args.ppVertexShader && *args.ppVertexShader)
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppVertexShader, *args.ppVertexShader, NPT_OBJECT_TYPE_ID3D11VERTEXSHADER);
 
@@ -1711,6 +1717,9 @@ npt_dispatch_ID3D11Device_CreateGeometryShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
+    /* SailOver diagnostic: a failed creation leaves the guest id unregistered (later "argument handle is unknown") */
+    if ((int32_t)args.ret < 0 || !args.ppGeometryShader || !*args.ppGeometryShader)
+        npt_log("CreateGeometryShader failed: hr 0x%08x guest id 0x%016" PRIx64, (unsigned)args.ret, (uint64_t)args._guest_id_ppGeometryShader);
     if (args.ppGeometryShader && *args.ppGeometryShader)
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppGeometryShader, *args.ppGeometryShader, NPT_OBJECT_TYPE_ID3D11GEOMETRYSHADER);
 
@@ -2064,6 +2073,9 @@ npt_dispatch_ID3D11Device_CreatePixelShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
+    /* SailOver diagnostic: a failed creation leaves the guest id unregistered (later "argument handle is unknown") */
+    if ((int32_t)args.ret < 0 || !args.ppPixelShader || !*args.ppPixelShader)
+        npt_log("CreatePixelShader failed: hr 0x%08x guest id 0x%016" PRIx64, (unsigned)args.ret, (uint64_t)args._guest_id_ppPixelShader);
     if (args.ppPixelShader && *args.ppPixelShader)
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppPixelShader, *args.ppPixelShader, NPT_OBJECT_TYPE_ID3D11PIXELSHADER);
 
@@ -2219,6 +2231,9 @@ npt_dispatch_ID3D11Device_CreateHullShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
+    /* SailOver diagnostic: a failed creation leaves the guest id unregistered (later "argument handle is unknown") */
+    if ((int32_t)args.ret < 0 || !args.ppHullShader || !*args.ppHullShader)
+        npt_log("CreateHullShader failed: hr 0x%08x guest id 0x%016" PRIx64, (unsigned)args.ret, (uint64_t)args._guest_id_ppHullShader);
     if (args.ppHullShader && *args.ppHullShader)
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppHullShader, *args.ppHullShader, NPT_OBJECT_TYPE_ID3D11HULLSHADER);
 
@@ -2374,6 +2389,9 @@ npt_dispatch_ID3D11Device_CreateDomainShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
+    /* SailOver diagnostic: a failed creation leaves the guest id unregistered (later "argument handle is unknown") */
+    if ((int32_t)args.ret < 0 || !args.ppDomainShader || !*args.ppDomainShader)
+        npt_log("CreateDomainShader failed: hr 0x%08x guest id 0x%016" PRIx64, (unsigned)args.ret, (uint64_t)args._guest_id_ppDomainShader);
     if (args.ppDomainShader && *args.ppDomainShader)
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppDomainShader, *args.ppDomainShader, NPT_OBJECT_TYPE_ID3D11DOMAINSHADER);
 
@@ -2529,6 +2547,9 @@ npt_dispatch_ID3D11Device_CreateComputeShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
+    /* SailOver diagnostic: a failed creation leaves the guest id unregistered (later "argument handle is unknown") */
+    if ((int32_t)args.ret < 0 || !args.ppComputeShader || !*args.ppComputeShader)
+        npt_log("CreateComputeShader failed: hr 0x%08x guest id 0x%016" PRIx64, (unsigned)args.ret, (uint64_t)args._guest_id_ppComputeShader);
     if (args.ppComputeShader && *args.ppComputeShader)
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppComputeShader, *args.ppComputeShader, NPT_OBJECT_TYPE_ID3D11COMPUTESHADER);
 
@@ -5571,7 +5592,7 @@ npt_dispatch_ID3D11Device_GetImmediateContext(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppImmediateContext && *args.ppImmediateContext)
+    if (args.ppImmediateContext) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppImmediateContext, *args.ppImmediateContext, NPT_OBJECT_TYPE_ID3D11DEVICECONTEXT);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -5933,7 +5954,7 @@ npt_dispatch_ID3D11Device1_GetImmediateContext1(struct npt_dispatch_context *ctx
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppImmediateContext && *args.ppImmediateContext)
+    if (args.ppImmediateContext) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppImmediateContext, *args.ppImmediateContext, NPT_OBJECT_TYPE_ID3D11DEVICECONTEXT1);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -6972,7 +6993,7 @@ npt_dispatch_ID3D11Device2_GetImmediateContext2(struct npt_dispatch_context *ctx
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppImmediateContext && *args.ppImmediateContext)
+    if (args.ppImmediateContext) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppImmediateContext, *args.ppImmediateContext, NPT_OBJECT_TYPE_ID3D11DEVICECONTEXT2);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -8595,7 +8616,7 @@ npt_dispatch_ID3D11Device3_GetImmediateContext3(struct npt_dispatch_context *ctx
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppImmediateContext && *args.ppImmediateContext)
+    if (args.ppImmediateContext) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppImmediateContext, *args.ppImmediateContext, NPT_OBJECT_TYPE_ID3D11DEVICECONTEXT3);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {

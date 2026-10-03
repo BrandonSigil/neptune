@@ -268,7 +268,7 @@ npt_dispatch_IDXGISwapChain_GetBuffer(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppSurface && *args.ppSurface)
+    if (args.ppSurface) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppSurface, *args.ppSurface,
             npt_object_type_from_iid(args.riid));
 
@@ -533,7 +533,7 @@ npt_dispatch_IDXGISwapChain_GetFullscreenState(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppTarget && *args.ppTarget)
+    if (args.ppTarget) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppTarget, *args.ppTarget, NPT_OBJECT_TYPE_IDXGIOUTPUT);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -1042,7 +1042,7 @@ npt_dispatch_IDXGISwapChain_GetContainingOutput(struct npt_dispatch_context *ctx
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppOutput && *args.ppOutput)
+    if (args.ppOutput) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppOutput, *args.ppOutput, NPT_OBJECT_TYPE_IDXGIOUTPUT);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -1789,7 +1789,7 @@ npt_dispatch_IDXGISwapChain1_GetCoreWindow(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppUnk && *args.ppUnk)
+    if (args.ppUnk) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppUnk, *args.ppUnk,
             npt_object_type_from_iid(args.refiid));
 
@@ -2167,7 +2167,7 @@ npt_dispatch_IDXGISwapChain1_GetRestrictToOutput(struct npt_dispatch_context *ct
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppRestrictToOutput && *args.ppRestrictToOutput)
+    if (args.ppRestrictToOutput) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppRestrictToOutput, *args.ppRestrictToOutput, NPT_OBJECT_TYPE_IDXGIOUTPUT);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {

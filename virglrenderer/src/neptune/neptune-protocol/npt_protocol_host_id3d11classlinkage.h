@@ -149,7 +149,7 @@ npt_dispatch_ID3D11ClassLinkage_GetClassInstance(struct npt_dispatch_context *ct
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppInstance && *args.ppInstance)
+    if (args.ppInstance) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppInstance, *args.ppInstance, NPT_OBJECT_TYPE_ID3D11CLASSINSTANCE);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {

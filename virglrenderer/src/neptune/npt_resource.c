@@ -21,6 +21,75 @@
 #include "neptune-protocol/npt_protocol_host_dispatch_types.h"
 #include "neptune-protocol/npt_protocol_host_id3d12resource.h"
 
+/* SailOver test trace (NPT_TRACE_TEXUPD=<max lines>): every texture update path with the texture's description, to
+ * find which path the game's partial texture updates take. Off by default. */
+#include <stdio.h>
+#include <stdarg.h>
+static int npt_texupd_budget = -1;
+/* SailOver test stats (NPT_TRACE_UNMAP=1): bytes copied by UNMAP per 5 s, split by map kind. */
+#include <time.h>
+static struct { int on; uint64_t t0, n[3], bytes[3], maxb[3]; } npt_unmap_stats = { -1 };
+
+static void
+npt_unmap_account(uint32_t access_flags, uint64_t bytes)
+{
+   if (npt_unmap_stats.on < 0)
+      npt_unmap_stats.on = getenv("NPT_TRACE_UNMAP") != NULL;
+   if (!npt_unmap_stats.on)
+      return;
+   const int k = !access_flags ? 0 : (access_flags & NPT_MAP_ACCESS_DISCARD) ? 1 : 2;
+   npt_unmap_stats.n[k]++;
+   npt_unmap_stats.bytes[k] += bytes;
+   if (bytes > npt_unmap_stats.maxb[k])
+      npt_unmap_stats.maxb[k] = bytes;
+   const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+   if (!npt_unmap_stats.t0)
+      npt_unmap_stats.t0 = now;
+   if (now - npt_unmap_stats.t0 >= 5000000000ull) {
+      static const char *const names[3] = { "sync", "discard", "no_overwrite" };
+      for (int i = 0; i < 3; i++)
+         fprintf(stderr, "unmap stats 5 s: %s %llu unmaps, %.1f MiB copied, max %.1f KiB\n", names[i],
+                 (unsigned long long)npt_unmap_stats.n[i], npt_unmap_stats.bytes[i] / 1048576.0,
+                 npt_unmap_stats.maxb[i] / 1024.0);
+      memset(npt_unmap_stats.n, 0, sizeof(npt_unmap_stats.n));
+      memset(npt_unmap_stats.bytes, 0, sizeof(npt_unmap_stats.bytes));
+      memset(npt_unmap_stats.maxb, 0, sizeof(npt_unmap_stats.maxb));
+      npt_unmap_stats.t0 = now;
+   }
+}
+
+
+static void
+npt_trace_tex(void *resource, const char *fmt, ...)
+{
+   if (npt_texupd_budget < 0) {
+      const char *e = getenv("NPT_TRACE_TEXUPD");
+      npt_texupd_budget = e ? atoi(e) : 0;
+   }
+   if (!npt_texupd_budget || !resource)
+      return;
+   PFN_ID3D11Resource_GetType get_type =
+      NPT_COM_VTBL_FUNC(PFN_ID3D11Resource_GetType, npt_com_vtable(resource), NPT_VTBL_ID3D11Resource_GetType);
+   D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+   get_type(resource, &dim);
+   if (dim != D3D11_RESOURCE_DIMENSION_TEXTURE2D)
+      return;
+   D3D11_TEXTURE2D_DESC d;
+   memset(&d, 0, sizeof(d));
+   PFN_ID3D11Texture2D_GetDesc get_desc =
+      NPT_COM_VTBL_FUNC(PFN_ID3D11Texture2D_GetDesc, npt_com_vtable(resource), NPT_VTBL_ID3D11Texture2D_GetDesc);
+   get_desc(resource, &d);
+   char msg[256];
+   va_list ap;
+   va_start(ap, fmt);
+   vsnprintf(msg, sizeof(msg), fmt, ap);
+   va_end(ap);
+   npt_texupd_budget--;
+   fprintf(stderr, "texupd: tex %p %ux%u fmt %u mips %u arr %u usage %u bind 0x%x cpu 0x%x: %s\n", resource,
+           d.Width, d.Height, (unsigned)d.Format, d.MipLevels, d.ArraySize, (unsigned)d.Usage, d.BindFlags,
+           d.CPUAccessFlags, msg);
+}
+
 void
 npt_resource_update(struct npt_context *ctx,
                     uint64_t resource_id, uint32_t subresource,
@@ -125,6 +194,8 @@ npt_resource_update(struct npt_context *ctx,
       NPT_COM_VTBL_FUNC(PFN_ID3D11DeviceContext_UpdateSubresource,
                         npt_com_vtable(imm_ctx),
                         NPT_VTBL_ID3D11DeviceContext_UpdateSubresource);
+   npt_trace_tex(resource, "update sub %u box %s %u,%u-%u,%u pitch %u bytes %u", subresource, has_box ? "yes" : "no",
+                 box_left, box_top, box_right, box_bottom, row_pitch, byte_size);
    update(imm_ctx, resource, subresource, box_arg, payload,
           row_pitch, depth_pitch);
 
@@ -328,7 +399,14 @@ npt_resource_map(struct npt_context *ctx,
       bound = shmem_res->size - shmem_offset;
    const uint32_t mapped_size = (uint32_t)bound;
 
-   if (access_flags & NPT_MAP_ACCESS_READ)
+   /* SailOver: a D3D11 Map that is not WRITE_DISCARD keeps the resource contents (MAP_WRITE, READ_WRITE, and
+    * WRITE_NO_OVERWRITE, whose unwritten bytes stay valid), and the Unmap ships the whole slot back. Copy the
+    * current contents into the slot for those too, not only for READ: Rocket League's Scaleform glyph cache copies
+    * its atlas into a CPU-write staging texture, maps it with MAP_WRITE, adds glyphs and uploads the whole mapped
+    * image; with an empty slot each upload erased the older glyphs (text disappearing, run 20261003T025108). */
+   const bool keep_contents = context_id && (access_flags & NPT_MAP_ACCESS_WRITE) &&
+                              !(access_flags & NPT_MAP_ACCESS_DISCARD);
+   if ((access_flags & NPT_MAP_ACCESS_READ) || keep_contents)
       memcpy((uint8_t *)shmem_res->u.data + shmem_offset, mapped.pData,
              mapped_size);
 
@@ -355,6 +433,9 @@ npt_resource_map(struct npt_context *ctx,
       .persistent   = !!(access_flags & NPT_MAP_ACCESS_PERSISTENT),
    };
 
+   if (context_id)
+      npt_trace_tex(resource, "sync map sub %u access 0x%x rowpitch %u size %u slot_off %u", subresource,
+                    access_flags, mapped.RowPitch, mapped_size, shmem_offset);
    *out_row_pitch = mapped.RowPitch;
    *out_depth_pitch = mapped.DepthPitch;
    *out_mapped_size = mapped_size;
@@ -398,6 +479,9 @@ npt_resource_unmap(struct npt_context *ctx,
    }
    const uint8_t *slot_src =
       (const uint8_t *)shmem_res->u.data + shmem_offset;
+   if (context_id)
+      npt_trace_tex(resource, "unmap sub %u access 0x%x bytes %llu slot_off %u", subresource, access_flags,
+                    (unsigned long long)byte_size, shmem_offset);
 
    if (access_flags) {
       /* Rename-ring path: no prior MAP_RESOURCE; replay the full
@@ -439,7 +523,16 @@ npt_resource_unmap(struct npt_context *ctx,
          uint64_t bound = byte_size;
          if ((uint64_t)shmem_offset + bound > shmem_res->size)
             bound = shmem_res->size - shmem_offset;
-         memcpy(mapped.pData, slot_src, (size_t)bound);
+         /* SailOver: a D3D11 rename replay may name the byte range the guest needs shipped (deferred dynamic
+          * vertex/index buffers); only that range is copied, at the same offset. 0/0 means the whole slot. */
+         uint64_t from = 0;
+         if (written_range_end > written_range_begin && written_range_begin != NPT_MAP_RANGE_NULL) {
+            from = written_range_begin < bound ? written_range_begin : bound;
+            if (written_range_end < bound)
+               bound = written_range_end;
+         }
+         memcpy((uint8_t *)mapped.pData + from, slot_src + from, (size_t)(bound - from));
+         npt_unmap_account(access_flags, bound - from);
       }
 
       unmap_fn(imm_ctx, resource, subresource);
@@ -469,6 +562,7 @@ npt_resource_unmap(struct npt_context *ctx,
       if (bound > entry->mapped_size)
          bound = entry->mapped_size;
       memcpy(entry->mapped_data, slot_src, (size_t)bound);
+      npt_unmap_account(0, bound);
    }
 
    if (!context_id) {

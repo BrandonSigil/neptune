@@ -145,7 +145,7 @@ npt_dispatch_ID3D12ProtectedSession_GetStatusFence(struct npt_dispatch_context *
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppFence && *args.ppFence)
+    if (args.ppFence) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppFence, *args.ppFence,
             npt_object_type_from_iid(args.riid));
 

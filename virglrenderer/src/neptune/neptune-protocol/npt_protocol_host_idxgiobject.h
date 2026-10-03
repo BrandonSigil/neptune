@@ -571,7 +571,7 @@ npt_dispatch_IDXGIObject_GetParent(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppParent && *args.ppParent)
+    if (args.ppParent) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppParent, *args.ppParent,
             npt_object_type_from_iid(args.riid));
 

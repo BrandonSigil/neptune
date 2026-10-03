@@ -134,7 +134,7 @@ npt_dispatch_IDXGIDevice_GetAdapter(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.pAdapter && *args.pAdapter)
+    if (args.pAdapter) /* SailOver: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_pAdapter, *args.pAdapter, NPT_OBJECT_TYPE_IDXGIADAPTER);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
