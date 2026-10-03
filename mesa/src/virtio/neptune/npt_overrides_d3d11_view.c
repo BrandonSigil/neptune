@@ -145,6 +145,32 @@ view_GetResource_override(void *self, ID3D11Resource **ppResource)
    struct npt_d3d11_view_aux *aux = ((struct npt_com_base *)self)->aux;
    const GUID *iid = (aux && aux->resource_iid) ? aux->resource_iid
                                                 : &NPT_IID_ID3D11Resource;
+   /* Context state queries can return a fresh view wrapper, without the
+    * metadata recorded by Create*View.  Fetch the real resource dimension
+    * before constructing its wrapper; the base Resource vtable lacks the
+    * derived GetDesc slot used by applications.  This synchronous call also
+    * drains the preceding asynchronous GetResource on the same ring. */
+   if (npt_guid_equal(iid, &NPT_IID_ID3D11Resource)) {
+      D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+      npt_call_ID3D11Resource_GetType(npt_com_self_ring(self),
+                                     (uint64_t)(uintptr_t)raw, &dimension);
+      switch (dimension) {
+      case D3D11_RESOURCE_DIMENSION_BUFFER:
+         iid = &NPT_IID_ID3D11Buffer;
+         break;
+      case D3D11_RESOURCE_DIMENSION_TEXTURE1D:
+         iid = &NPT_IID_ID3D11Texture1D;
+         break;
+      case D3D11_RESOURCE_DIMENSION_TEXTURE2D:
+         iid = &NPT_IID_ID3D11Texture2D;
+         break;
+      case D3D11_RESOURCE_DIMENSION_TEXTURE3D:
+         iid = &NPT_IID_ID3D11Texture3D;
+         break;
+      default:
+         break;
+      }
+   }
    *ppResource = (ID3D11Resource *)npt_com_get_or_wrap(
       npt_com_self_device(self), iid,
       (uint64_t)(uintptr_t)raw,

@@ -458,37 +458,13 @@ static HRESULT NPT_STDMETHODCALLTYPE
 ctx_GetData_override(void *self, ID3D11Asynchronous *pAsync, void *pData,
                      UINT DataSize, UINT GetDataFlags)
 {
-   struct npt_d3d11_query_aux *aux = npt_d3d11_query_aux_cast(pAsync);
-   struct npt_query_feedback_slot *slot = ctx_query_slot(aux);
-   if (!slot || !aux->base.registered) {
-      /* Counter, OOM at Create, or QI-routed wrapper. */
-      return npt_id3d11devicecontext_default_GetData(self, pAsync, pData,
-                                                     DataSize, GetDataFlags);
-   }
-
-   const uint64_t s = atomic_load_explicit(&slot->state,
-                                           memory_order_acquire);
-   const uint32_t flag = (uint32_t)(s & 0xFFFFFFFFu);
-   const uint32_t version = (uint32_t)(s >> 32);
-   const uint32_t expected =
-      atomic_load_explicit(&aux->local_version, memory_order_relaxed);
-
-   if (flag == NPT_QUERY_FEEDBACK_FLAG_READY && version == expected) {
-      if (pData && DataSize) {
-         const UINT copy = DataSize <= aux->query_data_size ?
-                           DataSize : aux->query_data_size;
-         memcpy(pData, slot->result, copy);
-      }
-      return NPT_S_OK;
-   }
-
-   /* DONOTFLUSH: caller polls; return S_FALSE locally.  Otherwise
-    * the spec allows GetData to flush the immediate context, so go
-    * sync to drive result availability. */
-   if (GetDataFlags & 0x1u /* D3D11_ASYNC_GETDATA_DONOTFLUSH */)
-      return NPT_S_FALSE;
+   /* The pinned host publishes version zero for every query cycle.
+    * Reading its shared slot cannot distinguish Begin/End generations,
+    * and rejecting version zero after Begin makes DONOTFLUSH spin forever.
+    * Ask the real host for the result on every call, preserving the flags.
+    * This also avoids serving stale cached results for End-only queries. */
    return npt_id3d11devicecontext_default_GetData(self, pAsync, pData,
-                                                  DataSize, GetDataFlags);
+                                                DataSize, GetDataFlags);
 }
 
 /* CopyFlags hints (DISCARD, NO_OVERWRITE) are advisory in the host
@@ -505,6 +481,41 @@ ctx_UpdateSubresource1_override(void *self, ID3D11Resource *pDstResource,
                                   SrcDepthPitch);
 }
 
+/* The protocol reserves output ids before a state query runs, and its
+ * reply carries no null mask.  A reserved id therefore does not establish
+ * that the host returned a view.  Query the actual host object before
+ * exposing it to an application; QI reports E_NOINTERFACE for an id which
+ * the host did not register, without making the decoder fatal. */
+static void
+ctx_confirm_host_view(void **view, const GUID *iid)
+{
+   if (!view || !*view)
+      return;
+   void *confirmed = NULL;
+   HRESULT hr = npt_com_query_interface_host(*view, iid, &confirmed);
+   if (NPT_SUCCEEDED(hr) && confirmed) {
+      npt_com_default_release(confirmed);
+   } else {
+      npt_com_default_release(*view);
+      *view = NULL;
+   }
+}
+
+static void NPT_STDMETHODCALLTYPE
+ctx_OMGetRenderTargets_override(void *self, UINT NumViews,
+                               ID3D11RenderTargetView **views,
+                               ID3D11DepthStencilView **depth)
+{
+   npt_id3d11devicecontext_default_OMGetRenderTargets(self, NumViews,
+                                                   views, depth);
+   if (views) {
+      for (UINT i = 0; i < NumViews; i++)
+         ctx_confirm_host_view((void **)&views[i],
+                               &NPT_IID_ID3D11RenderTargetView);
+   }
+   ctx_confirm_host_view((void **)depth, &NPT_IID_ID3D11DepthStencilView);
+}
+
 void
 npt_overrides_d3d11_context_init(void)
 {
@@ -516,6 +527,8 @@ npt_overrides_d3d11_context_init(void)
                                                ctx_UpdateSubresource1_override);
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(Begin,   ctx_Begin_override);
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(GetData, ctx_GetData_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE_CONTEXT(OMGetRenderTargets,
+                                             ctx_OMGetRenderTargets_override);
 
    npt_com_register_family(context_tiers, 0, NULL);
 }
