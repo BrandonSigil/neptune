@@ -264,7 +264,7 @@ npt_lookup_cache_slot(uint64_t id)
           (NPT_CS_LOOKUP_CACHE_SIZE - 1);
 }
 
-/* SailOver diagnostic: ids that missed a lookup, to report a later (racing) registration of the same id. */
+/* Obelisk diagnostic: ids that missed a lookup, to report a later (racing) registration of the same id. */
 static _Atomic uint64_t npt_diag_missed[64];
 static _Atomic unsigned npt_diag_missed_pos;
 static void npt_diag_note_miss(uint64_t id)
@@ -469,7 +469,7 @@ npt_cs_handle_register_guest_id(struct npt_dispatch_context *dispatch,
       return;
    struct npt_context *ctx = npt_context_from_dispatch(dispatch);
    if (!obj) {
-      /* SailOver: remember that this guest id stands for "nothing" (see null_ids) */
+      /* Obelisk: remember that this guest id stands for "nothing" (see null_ids) */
       if (ctx->null_ids) {
          uint64_t *key = malloc(sizeof(*key));
          if (key) {

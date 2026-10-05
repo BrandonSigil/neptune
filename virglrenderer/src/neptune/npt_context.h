@@ -130,7 +130,7 @@ struct npt_context {
     * Drained by COM_RELEASE and context_destroy. */
    mtx_t object_mutex;
    struct hash_table *object_table;
-   /* SailOver: guest ids whose host object is NULL (a Get* that returned nothing bound, an empty array slot).
+   /* Obelisk: guest ids whose host object is NULL (a Get* that returned nothing bound, an empty array slot).
     * The guest wraps every output id it stashed; a later Set* with such an id must bind NULL, not miss. */
    struct hash_table *null_ids;
    /* Bumped (release) whenever an id leaves the table or changes type;

@@ -9333,7 +9333,7 @@ npt_dispatch_ID3D11DeviceContext_PSGetShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppPixelShader) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppPixelShader) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppPixelShader, *args.ppPixelShader, NPT_OBJECT_TYPE_ID3D11PIXELSHADER);
     if (args.ppClassInstances && args._guest_ids_ppClassInstances) {
         const uint32_t _n = args._guest_id_count_ppClassInstances;
@@ -9648,7 +9648,7 @@ npt_dispatch_ID3D11DeviceContext_VSGetShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppVertexShader) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppVertexShader) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppVertexShader, *args.ppVertexShader, NPT_OBJECT_TYPE_ID3D11VERTEXSHADER);
     if (args.ppClassInstances && args._guest_ids_ppClassInstances) {
         const uint32_t _n = args._guest_id_count_ppClassInstances;
@@ -9931,7 +9931,7 @@ npt_dispatch_ID3D11DeviceContext_IAGetInputLayout(struct npt_dispatch_context *c
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppInputLayout) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppInputLayout) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppInputLayout, *args.ppInputLayout, NPT_OBJECT_TYPE_ID3D11INPUTLAYOUT);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -10252,7 +10252,7 @@ npt_dispatch_ID3D11DeviceContext_IAGetIndexBuffer(struct npt_dispatch_context *c
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.pIndexBuffer) /* SailOver: NULL outputs too (null_ids) */
+    if (args.pIndexBuffer) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_pIndexBuffer, *args.pIndexBuffer, NPT_OBJECT_TYPE_ID3D11BUFFER);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -10561,7 +10561,7 @@ npt_dispatch_ID3D11DeviceContext_GSGetShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppGeometryShader) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppGeometryShader) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppGeometryShader, *args.ppGeometryShader, NPT_OBJECT_TYPE_ID3D11GEOMETRYSHADER);
     if (args.ppClassInstances && args._guest_ids_ppClassInstances) {
         const uint32_t _n = args._guest_id_count_ppClassInstances;
@@ -11117,7 +11117,7 @@ npt_dispatch_ID3D11DeviceContext_GetPredication(struct npt_dispatch_context *ctx
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppPredicate) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppPredicate) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppPredicate, *args.ppPredicate, NPT_OBJECT_TYPE_ID3D11PREDICATE);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -11570,7 +11570,7 @@ npt_dispatch_ID3D11DeviceContext_OMGetRenderTargets(struct npt_dispatch_context 
             npt_cs_handle_register_guest_id(ctx,
                 args._guest_ids_ppRenderTargetViews[_i], args.ppRenderTargetViews[_i], NPT_OBJECT_TYPE_ID3D11RENDERTARGETVIEW);
     }
-    if (args.ppDepthStencilView) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppDepthStencilView) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppDepthStencilView, *args.ppDepthStencilView, NPT_OBJECT_TYPE_ID3D11DEPTHSTENCILVIEW);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -11758,7 +11758,7 @@ npt_dispatch_ID3D11DeviceContext_OMGetRenderTargetsAndUnorderedAccessViews(struc
             npt_cs_handle_register_guest_id(ctx,
                 args._guest_ids_ppRenderTargetViews[_i], args.ppRenderTargetViews[_i], NPT_OBJECT_TYPE_ID3D11RENDERTARGETVIEW);
     }
-    if (args.ppDepthStencilView) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppDepthStencilView) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppDepthStencilView, *args.ppDepthStencilView, NPT_OBJECT_TYPE_ID3D11DEPTHSTENCILVIEW);
     if (args.ppUnorderedAccessViews && args._guest_ids_ppUnorderedAccessViews) {
         const uint32_t _n = args._guest_id_count_ppUnorderedAccessViews;
@@ -11913,7 +11913,7 @@ npt_dispatch_ID3D11DeviceContext_OMGetBlendState(struct npt_dispatch_context *ct
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppBlendState) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppBlendState) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppBlendState, *args.ppBlendState, NPT_OBJECT_TYPE_ID3D11BLENDSTATE);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -12051,7 +12051,7 @@ npt_dispatch_ID3D11DeviceContext_OMGetDepthStencilState(struct npt_dispatch_cont
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppDepthStencilState) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppDepthStencilState) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppDepthStencilState, *args.ppDepthStencilState, NPT_OBJECT_TYPE_ID3D11DEPTHSTENCILSTATE);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -12325,7 +12325,7 @@ npt_dispatch_ID3D11DeviceContext_RSGetState(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppRasterizerState) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppRasterizerState) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppRasterizerState, *args.ppRasterizerState, NPT_OBJECT_TYPE_ID3D11RASTERIZERSTATE);
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
@@ -12918,7 +12918,7 @@ npt_dispatch_ID3D11DeviceContext_HSGetShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppHullShader) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppHullShader) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppHullShader, *args.ppHullShader, NPT_OBJECT_TYPE_ID3D11HULLSHADER);
     if (args.ppClassInstances && args._guest_ids_ppClassInstances) {
         const uint32_t _n = args._guest_id_count_ppClassInstances;
@@ -13525,7 +13525,7 @@ npt_dispatch_ID3D11DeviceContext_DSGetShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppDomainShader) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppDomainShader) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppDomainShader, *args.ppDomainShader, NPT_OBJECT_TYPE_ID3D11DOMAINSHADER);
     if (args.ppClassInstances && args._guest_ids_ppClassInstances) {
         const uint32_t _n = args._guest_id_count_ppClassInstances;
@@ -14278,7 +14278,7 @@ npt_dispatch_ID3D11DeviceContext_CSGetShader(struct npt_dispatch_context *ctx,
      * later commands that reference them can be validated.  The riid
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
-    if (args.ppComputeShader) /* SailOver: NULL outputs too (null_ids) */
+    if (args.ppComputeShader) /* Obelisk: NULL outputs too (null_ids) */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppComputeShader, *args.ppComputeShader, NPT_OBJECT_TYPE_ID3D11COMPUTESHADER);
     if (args.ppClassInstances && args._guest_ids_ppClassInstances) {
         const uint32_t _n = args._guest_id_count_ppClassInstances;

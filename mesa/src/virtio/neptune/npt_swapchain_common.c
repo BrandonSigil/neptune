@@ -952,7 +952,7 @@ npt_gsc_SetHDRMetaData(void *self, DXGI_HDR_METADATA_TYPE Type, UINT Size,
 
 #endif /* __WINE__ */
 
-/* SailOver: input latency. The DXGI default lets a game queue three frames; when the display (vsync pacing) or the
+/* Obelisk: input latency. The DXGI default lets a game queue three frames; when the display (vsync pacing) or the
  * host renderer is the bottleneck those frames wait in the WSI queue and every input reaches the screen three frames
  * late. NPT_PRESENT_QUEUE=<n> makes Present wait until at most n earlier frames are still on their way to the
  * display (n = 1: the game samples input for frame N+2 once frame N is on screen). Default 1; 0 disables. */

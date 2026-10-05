@@ -245,7 +245,7 @@ option(
   type : 'combo',
   choices : ['x11', 'wsd'],
   value : 'x11',
-  description : 'Wine presentation backend of nptunix.so: x11 (DRI3/Present, built here as a native library) or wsd (SailOver window server; nptunix.so is built outside meson with the Wine cross toolchain).',
+  description : 'Wine presentation backend of nptunix.so: x11 (DRI3/Present, built here as a native library) or wsd (Obelisk window server; nptunix.so is built outside meson with the Wine cross toolchain).',
 )
 option(
   'npt_umd',

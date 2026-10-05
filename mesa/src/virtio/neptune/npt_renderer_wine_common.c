@@ -61,11 +61,11 @@ static int unixlib_wsi_init(uint32_t num_images, const int *fds,
     * other than winex11). */
    uint32_t x11_window = 0;
 #ifdef NPT_WSI_WSD
-   /* SailOver: winesailover.drv publishes the wsd window id of each top-level HWND under this property; the
+   /* Obelisk: wineobelisk.drv publishes the wsd window id of each top-level HWND under this property; the
     * swapchain of a child window presents into its top-level window. The value travels in x11_window. */
    if (hwnd) {
       HWND top = GetAncestor(hwnd, GA_ROOT);
-      x11_window = (uint32_t)(uintptr_t)GetPropW(top ? top : hwnd, L"__wine_sailover_window");
+      x11_window = (uint32_t)(uintptr_t)GetPropW(top ? top : hwnd, L"__wine_obelisk_window");
    }
    if (!x11_window) {
       npt_log("unixlib_wsi_init: no wsd window for hwnd %p", (void *)hwnd);

@@ -150,7 +150,7 @@ npt_dispatch_resource_unmap(struct npt_ring *ring, uint64_t context_id,
    return npt_ring_submit_raw(ring, &cmd, sizeof(cmd));
 }
 
-/* SailOver: D3D11 rename-replay unmap that ships only [range_begin, range_end) of the slot (the host maps the
+/* Obelisk: D3D11 rename-replay unmap that ships only [range_begin, range_end) of the slot (the host maps the
  * resource with access_flags and copies that byte range to the same offset). */
 bool
 npt_dispatch_resource_unmap_range_seqno(struct npt_ring *ring, uint64_t context_id,

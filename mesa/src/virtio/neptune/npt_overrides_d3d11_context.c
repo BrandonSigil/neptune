@@ -39,7 +39,7 @@ static const GUID *const context_tiers[] = {
    &NPT_IID_ID3D11DeviceContext4, NULL,
 };
 
-/* SailOver test trace (NPT_TRACE_STAGING=<max lines>): every context call that touches a STAGING or mapped texture,
+/* Obelisk test trace (NPT_TRACE_STAGING=<max lines>): every context call that touches a STAGING or mapped texture,
  * to follow the Scaleform glyph cache (staging R8 textures). Off by default. */
 static int
 npt_trace_staging_take(void)
@@ -97,7 +97,7 @@ npt_d3d11_map_to_access_flags(D3D11_MAP map_type)
 
 
 /*
- * SailOver: deferred, ranged sync of dynamic vertex and index buffers.
+ * Obelisk: deferred, ranged sync of dynamic vertex and index buffers.
  *
  * The rename-ring path ships the whole buffer at every Unmap. Rocket League (UE3) streams its immediate-mode geometry
  * through a 4 MiB dynamic vertex buffer and index buffer with Map(WRITE_NO_OVERWRITE) appends: about 7000 Unmaps per
@@ -563,7 +563,7 @@ ctx_Unmap_texture(void *self, struct npt_d3d11_texture *t)
 }
 
 /*
- * SailOver: a copy whose source texture is still mapped. Rocket League (Scaleform glyph cache) maps a staging texture
+ * Obelisk: a copy whose source texture is still mapped. Rocket League (Scaleform glyph cache) maps a staging texture
  * with D3D11_MAP_WRITE, writes glyphs, copies it to the glyph texture and maps it again, without an Unmap in between.
  * On Windows the copy reads the staging memory the game just wrote. Here the written bytes only live in the guest
  * map slot until an Unmap ships them, so the copy read stale host contents and glyphs went missing. Ship the slot to
@@ -603,7 +603,7 @@ ctx_CopySubresourceRegion_override(void *self, ID3D11Resource *pDstResource, UIN
                                    UINT DstY, UINT DstZ, ID3D11Resource *pSrcResource, UINT SrcSubresource,
                                    const D3D11_BOX *pSrcBox)
 {
-   { /* SailOver diag */
+   { /* Obelisk diag */
       static unsigned nd;
       struct npt_d3d11_texture *td = npt_d3d11_texture_cast(pDstResource), *ts = npt_d3d11_texture_cast(pSrcResource);
       if ((td || ts) && nd++ < 120)
@@ -641,7 +641,7 @@ ctx_CopySubresourceRegion1_override(void *self, ID3D11Resource *pDstResource, UI
 static void NPT_STDMETHODCALLTYPE
 ctx_CopyResource_override(void *self, ID3D11Resource *pDstResource, ID3D11Resource *pSrcResource)
 {
-   { /* SailOver diag */
+   { /* Obelisk diag */
       static unsigned nd;
       struct npt_d3d11_texture *td = npt_d3d11_texture_cast(pDstResource), *ts = npt_d3d11_texture_cast(pSrcResource);
       if ((td || ts) && nd++ < 120)
@@ -778,7 +778,7 @@ ctx_Map_override(void *self, ID3D11Resource *pResource, UINT Subresource,
          npt_log("stg: ctx %p Map tex %p(u%u) sub %u type %u flags 0x%x was_mapped %d -> 0x%x data %p pitch %u", self,
                  pResource, npt_d3d11_texture_get_usage(t), Subresource, (unsigned)MapType, MapFlags, was_mapped,
                  (unsigned)hr, pMappedResource->pData, pMappedResource->RowPitch);
-      static int n; /* SailOver diag */
+      static int n; /* Obelisk diag */
       if (n < 60 || !(n % 500))
          npt_log("diag: Map res %p sub %u type %u flags 0x%x -> 0x%x data %p pitch %u", pResource, Subresource,
                  (unsigned)MapType, MapFlags, (unsigned)hr, pMappedResource->pData, pMappedResource->RowPitch);
@@ -805,7 +805,7 @@ ctx_Unmap_override(void *self, ID3D11Resource *pResource, UINT Subresource)
    if (t && npt_trace_staging_take())
       npt_log("stg: ctx %p Unmap tex %p(u%u m%d) sub %u", self, pResource, npt_d3d11_texture_get_usage(t),
               npt_d3d11_texture_get_is_mapped(t), Subresource);
-   { /* SailOver diag: texture unmaps */
+   { /* Obelisk diag: texture unmaps */
       static int n;
       if (n < 60 || !(n % 500))
          npt_log("diag: Unmap res %p tex %p sub %u mapped %d flags 0x%x", pResource, t, Subresource,

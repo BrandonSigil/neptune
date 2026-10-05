@@ -296,7 +296,7 @@ struct npt_d3d11_buffer_aux {
    D3D11_BUFFER_DESC desc;
    bool has_desc;
    struct npt_d3d_map_ring map_ring;
-   /* SailOver: deferred sync of dynamic vertex/index buffers (see npt_overrides_d3d11_context.c).
+   /* Obelisk: deferred sync of dynamic vertex/index buffers (see npt_overrides_d3d11_context.c).
     * defer: -1 not decided yet, 0 never deferred, 1 deferred. pend_dirty: the current slot holds writes the host may
     * not have; pend_discard: the next ship must rename the host buffer first; [synced_lo, synced_hi): bytes shipped
     * since the last Map. */
@@ -306,7 +306,7 @@ struct npt_d3d11_buffer_aux {
 };
 
 struct npt_d3d11_buffer_aux *npt_d3d11_buffer_get_aux(struct npt_d3d11_buffer *b);
-/* SailOver: called with the wrapper when a buffer is destroyed (drops it from the deferred-sync bindings). */
+/* Obelisk: called with the wrapper when a buffer is destroyed (drops it from the deferred-sync bindings). */
 extern void (*npt_d3d11_buffer_destroy_hook)(void *buffer);
 
 void npt_d3d11_buffer_aux_init(struct npt_com_base *com,

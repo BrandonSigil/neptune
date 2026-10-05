@@ -21,12 +21,12 @@
 #include "neptune-protocol/npt_protocol_host_dispatch_types.h"
 #include "neptune-protocol/npt_protocol_host_id3d12resource.h"
 
-/* SailOver test trace (NPT_TRACE_TEXUPD=<max lines>): every texture update path with the texture's description, to
+/* Obelisk test trace (NPT_TRACE_TEXUPD=<max lines>): every texture update path with the texture's description, to
  * find which path the game's partial texture updates take. Off by default. */
 #include <stdio.h>
 #include <stdarg.h>
 static int npt_texupd_budget = -1;
-/* SailOver test stats (NPT_TRACE_UNMAP=1): bytes copied by UNMAP per 5 s, split by map kind. */
+/* Obelisk test stats (NPT_TRACE_UNMAP=1): bytes copied by UNMAP per 5 s, split by map kind. */
 #include <time.h>
 static struct { int on; uint64_t t0, n[3], bytes[3], maxb[3]; } npt_unmap_stats = { -1 };
 
@@ -399,7 +399,7 @@ npt_resource_map(struct npt_context *ctx,
       bound = shmem_res->size - shmem_offset;
    const uint32_t mapped_size = (uint32_t)bound;
 
-   /* SailOver: a D3D11 Map that is not WRITE_DISCARD keeps the resource contents (MAP_WRITE, READ_WRITE, and
+   /* Obelisk: a D3D11 Map that is not WRITE_DISCARD keeps the resource contents (MAP_WRITE, READ_WRITE, and
     * WRITE_NO_OVERWRITE, whose unwritten bytes stay valid), and the Unmap ships the whole slot back. Copy the
     * current contents into the slot for those too, not only for READ: Rocket League's Scaleform glyph cache copies
     * its atlas into a CPU-write staging texture, maps it with MAP_WRITE, adds glyphs and uploads the whole mapped
@@ -523,7 +523,7 @@ npt_resource_unmap(struct npt_context *ctx,
          uint64_t bound = byte_size;
          if ((uint64_t)shmem_offset + bound > shmem_res->size)
             bound = shmem_res->size - shmem_offset;
-         /* SailOver: a D3D11 rename replay may name the byte range the guest needs shipped (deferred dynamic
+         /* Obelisk: a D3D11 rename replay may name the byte range the guest needs shipped (deferred dynamic
           * vertex/index buffers); only that range is copied, at the same offset. 0/0 means the whole slot. */
          uint64_t from = 0;
          if (written_range_end > written_range_begin && written_range_begin != NPT_MAP_RANGE_NULL) {

@@ -220,7 +220,7 @@ static void vtest_signal_timeline(struct vtest_timeline *timeline,
                                   struct vtest_timeline_submit *to_submit,
                                   bool exact);
 
-/* SailOver: Neptune splits the timelines it is offered (VTEST_MAX_TIMELINE_COUNT) in two, and its upper half carries
+/* Obelisk: Neptune splits the timelines it is offered (VTEST_MAX_TIMELINE_COUNT) in two, and its upper half carries
  * Win32 event proxies and per-Present GPU-done tokens, round-robin (npt_renderer_event_ring_base in the guest). Each of
  * those fences retires on its own, when its event fires, in any order: a retirement must not take the earlier
  * submits of the ring with it. It did, and a Win32 event armed after a Present on the same ring signalled that
