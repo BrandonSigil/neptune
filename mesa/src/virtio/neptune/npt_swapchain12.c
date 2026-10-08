@@ -506,7 +506,7 @@ gsc12_present_common(void *self, UINT SyncInterval, UINT Flags)
    if (prof) t2 = npt_profile_now_ns();
 
    atomic_fetch_add(&c->image_inflight[img], 1);
-   npt_gsc_wsi_push(c, img, wait_fence_fd, token);
+   npt_gsc_wsi_push(c, img, wait_fence_fd, token, SyncInterval);
 
    c->present_count++;
    npt_profile_present_marker();

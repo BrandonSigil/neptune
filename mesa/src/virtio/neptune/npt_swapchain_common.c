@@ -208,7 +208,7 @@ npt_gsc_wsi_thread(LPVOID arg)
 
       /* Owned by entry now; the backend closes/consumes the fd. */
       npt_renderer_wsi_present(renderer, entry.image_index,
-                               entry.wait_fence_fd);
+                               entry.wait_fence_fd, entry.sync_interval);
       mtx_lock(&c->wsi_mutex);
       c->wsi_done++;
       cnd_broadcast(&c->wsi_cond);
@@ -260,7 +260,7 @@ npt_gsc_wsi_stop(struct npt_guest_swapchain_common *c, bool shutting_down)
 
 void
 npt_gsc_wsi_push(struct npt_guest_swapchain_common *c, uint32_t image_index,
-                 int wait_fence_fd, uint64_t token)
+                 int wait_fence_fd, uint64_t token, uint32_t sync_interval)
 {
    mtx_lock(&c->wsi_mutex);
    /* The latency ring caps in-flight presents below the queue size;
@@ -272,6 +272,7 @@ npt_gsc_wsi_push(struct npt_guest_swapchain_common *c, uint32_t image_index,
          .image_index = image_index,
          .wait_fence_fd = wait_fence_fd,
          .token = token,
+         .sync_interval = sync_interval,
       };
    c->wsi_tail++;
    cnd_signal(&c->wsi_cond);

@@ -172,7 +172,8 @@ struct npt_renderer_ops {
     */
    void (*wsi_present)(struct npt_renderer *renderer,
                        uint32_t image_index,
-                       int wait_fence_fd);
+                       int wait_fence_fd,
+                       uint32_t sync_interval);
 
    void (*wsi_destroy)(struct npt_renderer *renderer);
 
@@ -431,10 +432,12 @@ npt_renderer_wsi_init(struct npt_renderer *renderer,
 static inline void
 npt_renderer_wsi_present(struct npt_renderer *renderer,
                          uint32_t image_index,
-                         int wait_fence_fd)
+                         int wait_fence_fd,
+                         uint32_t sync_interval)
 {
    if (renderer->ops.wsi_present) {
-      renderer->ops.wsi_present(renderer, image_index, wait_fence_fd);
+      renderer->ops.wsi_present(renderer, image_index, wait_fence_fd,
+                                sync_interval);
       return;
    }
    /* No backend: drop the fence fd so it doesn't leak. */

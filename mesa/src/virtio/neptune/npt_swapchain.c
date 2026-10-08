@@ -301,7 +301,7 @@ gsc_present_common(void *self, UINT SyncInterval, UINT Flags)
 
    npt_gsc_display_backpressure_wait(c);
    atomic_fetch_add(&c->image_inflight[i], 1);
-   npt_gsc_wsi_push(c, i, wait_fence_fd, token);
+   npt_gsc_wsi_push(c, i, wait_fence_fd, token, SyncInterval);
 
    s->next_image = (i + 1) % NPT_SC_PRESENT_IMAGES;
    c->present_count++;

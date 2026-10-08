@@ -97,12 +97,14 @@ static int unixlib_wsi_init(uint32_t num_images, const int *fds,
    return p.result;
 }
 
-static void unixlib_wsi_present(uint32_t image_index, int wait_fence_fd)
+static void unixlib_wsi_present(uint32_t image_index, int wait_fence_fd,
+                                uint32_t sync_interval)
 {
    struct npt_unix_wsi_present_params p;
    memset(&p, 0, sizeof(p));
    p.image_index = image_index;
    p.wait_fence_fd = wait_fence_fd;
+   p.sync_interval = sync_interval;
    npt_wine_unix_call(npt_unix_wsi_present, &p);
    /* Close the fd unless xcb took it via SCM_RIGHTS. */
    if (wait_fence_fd >= 0 && !p.wait_fence_consumed)
@@ -141,10 +143,10 @@ wine_wsi_init(struct npt_renderer *r, uint32_t num_images,
 
 static void
 wine_wsi_present(struct npt_renderer *r, uint32_t image_index,
-                 int wait_fence_fd)
+                 int wait_fence_fd, uint32_t sync_interval)
 {
    (void)r;
-   unixlib_wsi_present(image_index, wait_fence_fd);
+   unixlib_wsi_present(image_index, wait_fence_fd, sync_interval);
 }
 
 static void

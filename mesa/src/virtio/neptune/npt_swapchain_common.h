@@ -66,6 +66,7 @@ struct npt_gsc_present_entry {
    uint32_t image_index;
    int      wait_fence_fd;   /* -1 = unfenced; ownership -> worker */
    uint64_t token;           /* event token to release after present */
+   uint32_t sync_interval;   /* the Present's SyncInterval */
 };
 
 struct npt_guest_swapchain_common {
@@ -186,7 +187,7 @@ npt_gsc_release_pool(struct npt_guest_swapchain_common *c);
 
 void
 npt_gsc_wsi_push(struct npt_guest_swapchain_common *c, uint32_t image_index,
-                 int wait_fence_fd, uint64_t token);
+                 int wait_fence_fd, uint64_t token, uint32_t sync_interval);
 
 /* ------------------------------------------------------------------ */
 /* present helpers                                                     */
