@@ -31,7 +31,11 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <sys/resource.h>
 #include <sys/types.h>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/un.h>
@@ -138,6 +142,37 @@ static void vtest_server_run(void);
 static void vtest_server_close_socket(void);
 static int vtest_client_dispatch_commands(struct vtest_client *client);
 
+/* Each mappable blob resource keeps an fd open here (its virgl_resource)
+ * and, for a Neptune shm blob, one more in the render worker (kept for a
+ * later D3D12 heap import): every CPU-visible D3D12 buffer of a game costs
+ * two fds, and games hold thousands, past the soft limit of 256 a macOS
+ * app inherits from launchd.  Raise the soft limit to the hard one; the
+ * render server and its workers inherit it. */
+static void vtest_server_raise_fd_limit(void)
+{
+   struct rlimit rl;
+   if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur >= rl.rlim_max)
+      return;
+
+   rlim_t want = rl.rlim_max;
+#ifdef __APPLE__
+   /* setrlimit refuses more than kern.maxfilesperproc. */
+   int per_proc = 0;
+   size_t len = sizeof(per_proc);
+   if (sysctlbyname("kern.maxfilesperproc", &per_proc, &len, NULL, 0) == 0 &&
+       per_proc > 0 && (rlim_t)per_proc < want)
+      want = (rlim_t)per_proc;
+#endif
+   if (want <= rl.rlim_cur)
+      return;
+
+   const rlim_t was = rl.rlim_cur;
+   rl.rlim_cur = want;
+   if (setrlimit(RLIMIT_NOFILE, &rl) != 0)
+      fprintf(stderr, "vtest: could not raise the fd limit from %llu\n",
+              (unsigned long long)was);
+}
+
 
 int vtest_main(int argc, char **argv)
 {
@@ -147,6 +182,7 @@ while (__AFL_LOOP(1000)) {
 
    vtest_server_getenv();
    vtest_server_parse_args(argc, argv);
+   vtest_server_raise_fd_limit();
 
    list_inithead(&server.new_clients);
    list_inithead(&server.active_clients);
