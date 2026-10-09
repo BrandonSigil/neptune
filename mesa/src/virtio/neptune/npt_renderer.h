@@ -254,6 +254,12 @@ struct npt_renderer {
     * zeros; submits fail; the runtime's own device-removed handling
     * tears the device down. */
    _Atomic uint32_t lost;
+
+   /* Shmem destroys queued on a DLL's async reaper (npt_resource.c) and
+    * not run yet.  Each DLL has its own reaper, the renderer is shared:
+    * the device destroy waits for this to drop to 0 before it destroys
+    * the transport those destroys still write to. */
+   _Atomic uint32_t reaps_pending;
 };
 
 static inline bool

@@ -384,6 +384,32 @@ npt_device_is_shutting_down(const struct npt_device *dev)
                     memory_order_acquire);
 }
 
+/* Waits for the async shmem destroys queued for the renderer.  False when
+ * they stop progressing for NPT_DEVICE_REAP_STALL_MS. */
+#define NPT_DEVICE_REAP_STALL_MS 1000
+
+static bool
+npt_device_drain_reaps(struct npt_renderer *renderer)
+{
+   uint32_t last = UINT32_MAX;
+   unsigned stalled_ms = 0;
+   for (;;) {
+      const uint32_t pending = atomic_load_explicit(&renderer->reaps_pending,
+                                                    memory_order_acquire);
+      if (!pending)
+         return true;
+      if (pending != last) {
+         last = pending;
+         stalled_ms = 0;
+      } else if (++stalled_ms >= NPT_DEVICE_REAP_STALL_MS) {
+         npt_log("device destroy: %u shmem destroys still queued; "
+                 "leaving the renderer", pending);
+         return false;
+      }
+      npt_relax_sleep_us(1000);
+   }
+}
+
 static void
 npt_device_destroy(struct npt_device *dev)
 {
@@ -423,7 +449,14 @@ npt_device_destroy(struct npt_device *dev)
    mtx_destroy(&dev->instance_rings_mutex);
    mtx_destroy(&dev->tls_rings_mutex);
    npt_wrapper_cache_fini(&dev->wrapper_cache);
-   npt_renderer_destroy(dev->renderer);
+   /* Released heaps leave their shmem destroys to the async reaper
+    * (npt_resource.c), which writes to the transport: wait for them, or
+    * the reaper writes to a closed socket and a freed renderer (about a
+    * thousand pending at the exit of a process that released as many
+    * D3D12 UPLOAD buffers).  A reaper that stops making progress (killed
+    * at process exit) leaks the renderer rather than racing its free. */
+   if (npt_device_drain_reaps(dev->renderer))
+      npt_renderer_destroy(dev->renderer);
    free(dev);
 }
 

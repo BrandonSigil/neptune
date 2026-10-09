@@ -29,8 +29,8 @@
  * turnaround.  Correctness: COM_RELEASE was queued in npt_com_destroy
  * before aux_destroy, and the host blob view is independent of the
  * guest mmap, so destroying out of order is safe.  Lazy-init, detached
- * worker; process exit doesn't drain — the kernel reclaims leftover
- * GEM handles + munmaps. */
+ * worker; the device destroy waits for the destroys queued for its
+ * renderer (reaps_pending) before it destroys the renderer. */
 struct shmem_reap_entry {
    struct npt_renderer *renderer;
    struct npt_renderer_shmem *shmem;
@@ -65,8 +65,13 @@ static void *shmem_reaper_main(void *arg)
          struct shmem_reap_entry *e =
             list_first_entry(&batch, struct shmem_reap_entry, head);
          list_del(&e->head);
-         e->renderer->shmem_ops.destroy(e->renderer, e->shmem);
+         struct npt_renderer *renderer = e->renderer;
+         renderer->shmem_ops.destroy(renderer, e->shmem);
          free(e);
+         /* Last access to the renderer: the device destroy may free it
+          * once this reaches 0. */
+         atomic_fetch_sub_explicit(&renderer->reaps_pending, 1,
+                                   memory_order_release);
       }
    }
 #if defined(_WIN32)
@@ -115,6 +120,8 @@ shmem_reaper_unref(struct npt_renderer *renderer,
    }
    e->renderer = renderer;
    e->shmem    = shmem;
+   atomic_fetch_add_explicit(&renderer->reaps_pending, 1,
+                             memory_order_relaxed);
 
    mtx_lock(&g_shmem_reaper.mutex);
    list_addtail(&e->head, &g_shmem_reaper.queue);
