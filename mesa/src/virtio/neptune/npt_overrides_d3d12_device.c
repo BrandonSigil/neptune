@@ -19,6 +19,10 @@
  *    GetCPU/GPUDescriptorHandleForHeapStart: immutable host answers
  *    behind sync round-trips; cached after the first call (engines
  *    re-derive descriptor handles from them constantly).
+ *  - CreatePipelineState and ID3D12PipelineLibrary1::LoadPipeline: a
+ *    pipeline state stream travels subobject by subobject, so one the
+ *    encoder cannot walk is refused here with E_INVALIDARG, as D3D12
+ *    refuses it.
  */
 
 #include "npt_com.h"
@@ -29,6 +33,7 @@
 
 #include "neptune-protocol/npt_protocol_client_id3d12descriptorheap.h"
 #include "neptune-protocol/npt_protocol_client_id3d12device.h"
+#include "neptune-protocol/npt_protocol_client_id3d12pipelinelibrary.h"
 #include "neptune-protocol/npt_protocol_guest_id3d12device.h"
 #include "neptune-protocol/npt_protocol_defs.h"
 
@@ -593,6 +598,63 @@ dev12_CreateCommandQueue_override(void *self,
    return hr;
 }
 
+/* ------------------------------------------------------------------ */
+/* pipeline state streams                                              */
+/* ------------------------------------------------------------------ */
+
+/* Whether the encoder can send this stream (npt_pso_stream_next walks
+ * it): every subobject of a known type, inside SizeInBytes, and no type
+ * twice, which D3D12 rejects too. */
+static bool
+pso_stream_valid(const D3D12_PIPELINE_STATE_STREAM_DESC *desc)
+{
+   if (!desc || !desc->pPipelineStateSubobjectStream || !desc->SizeInBytes)
+      return false;
+   uint32_t seen = 0;
+   size_t offset = 0;
+   UINT type;
+   const void *subobject;
+   int step;
+   while ((step = npt_pso_stream_next(desc, &offset, &type, &subobject)) > 0) {
+      if (seen & (1u << type))
+         return false;
+      seen |= 1u << type;
+   }
+   return step == 0;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_CreatePipelineState_override(void *self,
+                                   const D3D12_PIPELINE_STATE_STREAM_DESC *pDesc,
+                                   const IID *riid, void **ppPipelineState)
+{
+   if (!pso_stream_valid(pDesc)) {
+      npt_log("CreatePipelineState: invalid pipeline state stream");
+      if (ppPipelineState)
+         *ppPipelineState = NULL;
+      return NPT_E_INVALIDARG;
+   }
+   return npt_id3d12device2_default_CreatePipelineState(self, pDesc, riid,
+                                                        ppPipelineState);
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+pipelinelibrary12_LoadPipeline_override(
+   void *self, const WCHAR *pName,
+   const D3D12_PIPELINE_STATE_STREAM_DESC *pDesc, const IID *riid,
+   void **ppPipelineState)
+{
+   if (!pso_stream_valid(pDesc)) {
+      npt_log("LoadPipeline: invalid pipeline state stream");
+      if (ppPipelineState)
+         *ppPipelineState = NULL;
+      return NPT_E_INVALIDARG;
+   }
+   return npt_id3d12pipelinelibrary1_default_LoadPipeline(self, pName, pDesc,
+                                                          riid,
+                                                          ppPipelineState);
+}
+
 void
 npt_overrides_d3d12_device_init(void)
 {
@@ -600,6 +662,10 @@ npt_overrides_d3d12_device_init(void)
                                       dev12_CheckFeatureSupport_override);
    NPT_REGISTER_OVERRIDE_D3D12_DEVICE(CreateCommandQueue,
                                       dev12_CreateCommandQueue_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE2(CreatePipelineState,
+                                       dev12_CreatePipelineState_override);
+   NPT_REGISTER_OVERRIDE(id3d12pipelinelibrary1, LoadPipeline,
+                         pipelinelibrary12_LoadPipeline_override);
 
    NPT_REGISTER_OVERRIDE_D3D12_DEVICE(CreateCommittedResource,
                                       dev12_CreateCommittedResource_override);

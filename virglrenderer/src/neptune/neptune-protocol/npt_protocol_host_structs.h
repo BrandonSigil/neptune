@@ -10884,18 +10884,365 @@ npt_decode_D3D12_RT_FORMAT_ARRAY(struct npt_cs_decoder *dec, D3D12_RT_FORMAT_ARR
     npt_decode_UINT(dec, &val->NumRenderTargets);
 }
 
-/* D3D12_PIPELINE_STATE_STREAM_DESC (struct) */
+/* D3D12_PIPELINE_STATE_STREAM_DESC (struct) -- written by hand, not
+ * generated.
+ *
+ * A pipeline state stream is a packed list of subobjects: each one starts
+ * at pointer alignment with its D3D12_PIPELINE_STATE_SUBOBJECT_TYPE, and
+ * its description follows at the description's own alignment (d3dx12's
+ * CD3DX12_PIPELINE_STATE_STREAM_SUBOBJECT).  The descriptions hold
+ * pointers (root signature, shader bytecode, input layout, stream output,
+ * cached blob, view instance locations), so the stream cannot travel as
+ * raw bytes.  On the wire: the guest's SizeInBytes, the subobject count,
+ * then each subobject's type and its description through that
+ * description's codec.  The decoder rebuilds a packed stream whose
+ * pointers are host pointers; the root signature travels as its object id
+ * and npt_replace_D3D12_PIPELINE_STATE_STREAM_DESC_handle (host) resolves
+ * it. */
+
+/* Subobjects a stream may hold: one of each type at most. */
+#define NPT_PSO_STREAM_MAX_SUBOBJECTS 32
+
+union npt_pso_subobject_any {
+    ID3D12RootSignature *root_signature;
+    D3D12_SHADER_BYTECODE shader;
+    D3D12_STREAM_OUTPUT_DESC stream_output;
+    D3D12_BLEND_DESC blend;
+    UINT sample_mask;
+    D3D12_RASTERIZER_DESC rasterizer;
+    D3D12_RASTERIZER_DESC1 rasterizer1;
+    D3D12_RASTERIZER_DESC2 rasterizer2;
+    D3D12_DEPTH_STENCIL_DESC depth_stencil;
+    D3D12_DEPTH_STENCIL_DESC1 depth_stencil1;
+    D3D12_DEPTH_STENCIL_DESC2 depth_stencil2;
+    D3D12_INPUT_LAYOUT_DESC input_layout;
+    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE ib_strip_cut;
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE topology;
+    D3D12_RT_FORMAT_ARRAY rt_formats;
+    DXGI_FORMAT ds_format;
+    DXGI_SAMPLE_DESC sample_desc;
+    D3D12_NODE_MASK node_mask;
+    D3D12_CACHED_PIPELINE_STATE cached_pso;
+    D3D12_PIPELINE_STATE_FLAGS flags;
+    D3D12_VIEW_INSTANCING_DESC view_instancing;
+};
+
+/* Room for one subobject in a packed stream: its type and the padding up
+ * to the description, the largest description, the padding up to the next
+ * subobject. */
+#define NPT_PSO_STREAM_SLOT_SIZE (2 * sizeof(void *) + sizeof(union npt_pso_subobject_any))
+
+#define NPT_PSO_SUBOBJECT_LAYOUT(T) \
+    do { *size = sizeof(T); *align = _Alignof(T); } while (0)
+
+/* Size and alignment of a subobject's description; false for a type this
+ * protocol does not know. */
+static inline bool
+npt_pso_subobject_layout(UINT type, size_t *size, size_t *align)
+{
+    switch (type) {
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE:
+        NPT_PSO_SUBOBJECT_LAYOUT(ID3D12RootSignature *); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_HS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_SHADER_BYTECODE); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_STREAM_OUTPUT_DESC); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_BLEND_DESC); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK:
+        NPT_PSO_SUBOBJECT_LAYOUT(UINT); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_RASTERIZER_DESC); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_DEPTH_STENCIL_DESC); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_INPUT_LAYOUT_DESC); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_INDEX_BUFFER_STRIP_CUT_VALUE); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_PRIMITIVE_TOPOLOGY_TYPE); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_RT_FORMAT_ARRAY); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT:
+        NPT_PSO_SUBOBJECT_LAYOUT(DXGI_FORMAT); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC:
+        NPT_PSO_SUBOBJECT_LAYOUT(DXGI_SAMPLE_DESC); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_NODE_MASK); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_CACHED_PIPELINE_STATE); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_PIPELINE_STATE_FLAGS); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_DEPTH_STENCIL_DESC1); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_VIEW_INSTANCING_DESC); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_DEPTH_STENCIL_DESC2); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER1:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_RASTERIZER_DESC1); return true;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER2:
+        NPT_PSO_SUBOBJECT_LAYOUT(D3D12_RASTERIZER_DESC2); return true;
+    default:
+        return false;
+    }
+}
+
+#undef NPT_PSO_SUBOBJECT_LAYOUT
+
+static inline size_t
+npt_pso_stream_align(size_t offset, size_t align)
+{
+    return (offset + align - 1) & ~(align - 1);
+}
+
+/* Steps through a stream: at *offset (0 to start), finds the next
+ * subobject's type and description and moves *offset past it.  Returns 1
+ * for a subobject, 0 at the end of the stream, -1 for a type this protocol
+ * does not know or a subobject that overruns SizeInBytes. */
+static inline int
+npt_pso_stream_next(const D3D12_PIPELINE_STATE_STREAM_DESC *val, size_t *offset,
+                    UINT *type, const void **desc)
+{
+    const uint8_t *base = (const uint8_t *)val->pPipelineStateSubobjectStream;
+    const size_t end = val->SizeInBytes;
+    size_t at = npt_pso_stream_align(*offset, sizeof(void *));
+    size_t size, align;
+
+    if (!base || at >= end)
+        return 0;
+    if (end - at < sizeof(UINT))
+        return -1;
+    memcpy(type, base + at, sizeof(UINT));
+    if (!npt_pso_subobject_layout(*type, &size, &align))
+        return -1;
+    at = npt_pso_stream_align(at + sizeof(UINT), align);
+    if (at > end || end - at < size)
+        return -1;
+    *desc = base + at;
+    *offset = at + size;
+    return 1;
+}
+
+static inline size_t
+npt_sizeof_pso_subobject(UINT type, const void *desc, int max_mode)
+{
+    switch (type) {
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE:
+        return sizeof(uint64_t);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_HS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS:
+        return npt_sizeof_D3D12_SHADER_BYTECODE(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT:
+        return npt_sizeof_D3D12_STREAM_OUTPUT_DESC(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND:
+        return npt_sizeof_D3D12_BLEND_DESC(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK:
+        return npt_sizeof_UINT(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER:
+        return npt_sizeof_D3D12_RASTERIZER_DESC(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL:
+        return npt_sizeof_D3D12_DEPTH_STENCIL_DESC(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT:
+        return npt_sizeof_D3D12_INPUT_LAYOUT_DESC(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE:
+        return npt_sizeof_D3D12_INDEX_BUFFER_STRIP_CUT_VALUE(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY:
+        return npt_sizeof_D3D12_PRIMITIVE_TOPOLOGY_TYPE(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS:
+        return npt_sizeof_D3D12_RT_FORMAT_ARRAY(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT:
+        return npt_sizeof_DXGI_FORMAT(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC:
+        return npt_sizeof_DXGI_SAMPLE_DESC(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK:
+        return npt_sizeof_D3D12_NODE_MASK(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO:
+        return npt_sizeof_D3D12_CACHED_PIPELINE_STATE(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS:
+        return npt_sizeof_D3D12_PIPELINE_STATE_FLAGS(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1:
+        return npt_sizeof_D3D12_DEPTH_STENCIL_DESC1(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING:
+        return npt_sizeof_D3D12_VIEW_INSTANCING_DESC(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2:
+        return npt_sizeof_D3D12_DEPTH_STENCIL_DESC2(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER1:
+        return npt_sizeof_D3D12_RASTERIZER_DESC1(desc, max_mode);
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER2:
+        return npt_sizeof_D3D12_RASTERIZER_DESC2(desc, max_mode);
+    default:
+        return 0;
+    }
+}
+
+static inline void
+npt_encode_pso_subobject(struct npt_cs_encoder *enc, UINT type, const void *desc)
+{
+    switch (type) {
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE: {
+        ID3D12RootSignature *root_signature;
+        memcpy(&root_signature, desc, sizeof(root_signature));
+        npt_encode_com_handle(enc, npt_object_get_id(root_signature));
+        break;
+    }
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_HS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS:
+        npt_encode_D3D12_SHADER_BYTECODE(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT:
+        npt_encode_D3D12_STREAM_OUTPUT_DESC(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND:
+        npt_encode_D3D12_BLEND_DESC(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK:
+        npt_encode_UINT(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER:
+        npt_encode_D3D12_RASTERIZER_DESC(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL:
+        npt_encode_D3D12_DEPTH_STENCIL_DESC(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT:
+        npt_encode_D3D12_INPUT_LAYOUT_DESC(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE:
+        npt_encode_D3D12_INDEX_BUFFER_STRIP_CUT_VALUE(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY:
+        npt_encode_D3D12_PRIMITIVE_TOPOLOGY_TYPE(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS:
+        npt_encode_D3D12_RT_FORMAT_ARRAY(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT:
+        npt_encode_DXGI_FORMAT(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC:
+        npt_encode_DXGI_SAMPLE_DESC(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK:
+        npt_encode_D3D12_NODE_MASK(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO:
+        npt_encode_D3D12_CACHED_PIPELINE_STATE(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS:
+        npt_encode_D3D12_PIPELINE_STATE_FLAGS(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1:
+        npt_encode_D3D12_DEPTH_STENCIL_DESC1(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING:
+        npt_encode_D3D12_VIEW_INSTANCING_DESC(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2:
+        npt_encode_D3D12_DEPTH_STENCIL_DESC2(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER1:
+        npt_encode_D3D12_RASTERIZER_DESC1(enc, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER2:
+        npt_encode_D3D12_RASTERIZER_DESC2(enc, desc); break;
+    default:
+        break;
+    }
+}
+
+static inline void
+npt_decode_pso_subobject(struct npt_cs_decoder *dec, UINT type, void *desc)
+{
+    switch (type) {
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE: {
+        npt_object_id _id;
+        npt_decode_uint64_t(dec, &_id);
+        *(ID3D12RootSignature **)desc = (ID3D12RootSignature *)npt_object_from_id(_id);
+        break;
+    }
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_HS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS:
+        npt_decode_D3D12_SHADER_BYTECODE(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT:
+        npt_decode_D3D12_STREAM_OUTPUT_DESC(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND:
+        npt_decode_D3D12_BLEND_DESC(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK:
+        npt_decode_UINT(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER:
+        npt_decode_D3D12_RASTERIZER_DESC(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL:
+        npt_decode_D3D12_DEPTH_STENCIL_DESC(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT:
+        npt_decode_D3D12_INPUT_LAYOUT_DESC(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE:
+        npt_decode_D3D12_INDEX_BUFFER_STRIP_CUT_VALUE(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY:
+        npt_decode_D3D12_PRIMITIVE_TOPOLOGY_TYPE(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS:
+        npt_decode_D3D12_RT_FORMAT_ARRAY(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT:
+        npt_decode_DXGI_FORMAT(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC:
+        npt_decode_DXGI_SAMPLE_DESC(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK:
+        npt_decode_D3D12_NODE_MASK(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO:
+        npt_decode_D3D12_CACHED_PIPELINE_STATE(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS:
+        npt_decode_D3D12_PIPELINE_STATE_FLAGS(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1:
+        npt_decode_D3D12_DEPTH_STENCIL_DESC1(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING:
+        npt_decode_D3D12_VIEW_INSTANCING_DESC(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2:
+        npt_decode_D3D12_DEPTH_STENCIL_DESC2(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER1:
+        npt_decode_D3D12_RASTERIZER_DESC1(dec, desc); break;
+    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER2:
+        npt_decode_D3D12_RASTERIZER_DESC2(dec, desc); break;
+    default:
+        npt_cs_decoder_set_fatal(dec);
+        break;
+    }
+}
+
+/* The subobjects that travel: those before the end of the stream or before
+ * its first subobject the protocol cannot walk (the guest rejects such a
+ * stream before it encodes it). */
+static inline uint64_t
+npt_pso_stream_count(const D3D12_PIPELINE_STATE_STREAM_DESC *val)
+{
+    uint64_t count = 0;
+    size_t offset = 0;
+    UINT type;
+    const void *desc;
+    while (count < NPT_PSO_STREAM_MAX_SUBOBJECTS &&
+           npt_pso_stream_next(val, &offset, &type, &desc) > 0)
+        count++;
+    return count;
+}
 
 static inline size_t
 npt_sizeof_D3D12_PIPELINE_STATE_STREAM_DESC(const D3D12_PIPELINE_STATE_STREAM_DESC *val, int max_mode)
 {
+    const uint64_t count = npt_pso_stream_count(val);
     size_t size = 0;
+    size_t offset = 0;
+    UINT type;
+    const void *desc;
     size += npt_sizeof_SIZE_T(&val->SizeInBytes, max_mode);
-    if (val->pPipelineStateSubobjectStream) {
-        size += npt_sizeof_array_count(0);
-        size += npt_sizeof_blob_array(val->pPipelineStateSubobjectStream, 0);
-    } else {
-        size += npt_sizeof_array_count(0);
+    size += npt_sizeof_array_count(count);
+    for (uint64_t _i = 0; _i < count && npt_pso_stream_next(val, &offset, &type, &desc) > 0; _i++) {
+        size += npt_sizeof_UINT(&type, max_mode);
+        size += npt_sizeof_pso_subobject(type, desc, max_mode);
     }
     return size;
 }
@@ -10903,27 +11250,68 @@ npt_sizeof_D3D12_PIPELINE_STATE_STREAM_DESC(const D3D12_PIPELINE_STATE_STREAM_DE
 static inline void
 npt_encode_D3D12_PIPELINE_STATE_STREAM_DESC(struct npt_cs_encoder *enc, const D3D12_PIPELINE_STATE_STREAM_DESC *val)
 {
+    const uint64_t count = npt_pso_stream_count(val);
+    size_t offset = 0;
+    UINT type;
+    const void *desc;
     npt_encode_SIZE_T(enc, &val->SizeInBytes);
-    if (val->pPipelineStateSubobjectStream) {
-        npt_encode_array_count(enc, 0);
-        npt_encode_blob_array(enc, val->pPipelineStateSubobjectStream, 0);
-    } else {
-        npt_encode_array_count(enc, 0);
+    npt_encode_array_count(enc, count);
+    for (uint64_t _i = 0; _i < count && npt_pso_stream_next(val, &offset, &type, &desc) > 0; _i++) {
+        npt_encode_UINT(enc, &type);
+        npt_encode_pso_subobject(enc, type, desc);
     }
 }
 
 static inline void
 npt_decode_D3D12_PIPELINE_STATE_STREAM_DESC(struct npt_cs_decoder *dec, D3D12_PIPELINE_STATE_STREAM_DESC *val)
 {
-    npt_decode_SIZE_T(dec, &val->SizeInBytes);
-    {
-        const uint64_t _blob_size = npt_decode_array_count_unchecked(dec);
-        if (_blob_size) {
-            val->pPipelineStateSubobjectStream = npt_cs_decoder_alloc_temp(dec, _blob_size);
-            if (!val->pPipelineStateSubobjectStream) return;
-            npt_decode_blob_array(dec, (void *)val->pPipelineStateSubobjectStream, _blob_size);
-        } else {
-            val->pPipelineStateSubobjectStream = NULL;
+    SIZE_T guest_size;
+    npt_decode_SIZE_T(dec, &guest_size);
+    (void)guest_size;
+    val->SizeInBytes = 0;
+    val->pPipelineStateSubobjectStream = NULL;
+    const uint64_t count = npt_decode_array_count_unchecked(dec);
+    if (!count)
+        return;
+    if (count > NPT_PSO_STREAM_MAX_SUBOBJECTS) {
+        npt_cs_decoder_set_fatal(dec);
+        return;
+    }
+    uint8_t *stream = npt_cs_decoder_alloc_temp(dec, (size_t)count * NPT_PSO_STREAM_SLOT_SIZE);
+    if (!stream)
+        return;
+    memset(stream, 0, (size_t)count * NPT_PSO_STREAM_SLOT_SIZE);
+    size_t offset = 0;
+    for (uint64_t _i = 0; _i < count; _i++) {
+        UINT type;
+        size_t size, align;
+        npt_decode_UINT(dec, &type);
+        if (!npt_pso_subobject_layout(type, &size, &align)) {
+            npt_cs_decoder_set_fatal(dec);
+            return;
+        }
+        offset = npt_pso_stream_align(offset, sizeof(void *));
+        memcpy(stream + offset, &type, sizeof(type));
+        offset = npt_pso_stream_align(offset + sizeof(type), align);
+        npt_decode_pso_subobject(dec, type, stream + offset);
+        offset += size;
+    }
+    val->SizeInBytes = npt_pso_stream_align(offset, sizeof(void *));
+    val->pPipelineStateSubobjectStream = stream;
+}
+
+/* The root signature of a decoded stream travels as its object id. */
+static inline void
+npt_replace_D3D12_PIPELINE_STATE_STREAM_DESC_handle(struct npt_dispatch_context *ctx, D3D12_PIPELINE_STATE_STREAM_DESC *val)
+{
+    size_t offset = 0;
+    UINT type;
+    const void *desc;
+    while (npt_pso_stream_next(val, &offset, &type, &desc) > 0) {
+        if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE) {
+            ID3D12RootSignature **root_signature = (ID3D12RootSignature **)desc;
+            *root_signature = npt_cs_handle_lookup(ctx, (npt_object_id)(uintptr_t)*root_signature,
+                                                   NPT_OBJECT_TYPE_ID3D12ROOTSIGNATURE);
         }
     }
 }
