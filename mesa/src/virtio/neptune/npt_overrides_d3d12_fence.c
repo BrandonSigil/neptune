@@ -12,6 +12,9 @@
  *    the host last observed, not a monotonic max).
  *  - Device::CreateFence defers to the default thunk, then seeds +
  *    registers the feedback slot.
+ *  - Device1::SetEventOnMultipleFenceCompletion takes the same paths as
+ *    SetEventOnCompletion: the NULL-event form blocks guest-side, the
+ *    event form arms a host proxy and sends its token in the HANDLE slot.
  */
 
 #include <stdatomic.h>
@@ -31,6 +34,7 @@
 #include "neptune-protocol/npt_protocol_client_id3d12device.h"
 #include "neptune-protocol/npt_protocol_client_id3d12fence.h"
 #include "neptune-protocol/npt_protocol_defs.h"
+#include "neptune-protocol/npt_protocol_guest_id3d12device.h"
 #include "neptune-protocol/npt_protocol_guest_id3d12fence.h"
 
 #define NPT_REGISTER_OVERRIDE_D3D12_FENCE1(m, f) \
@@ -42,6 +46,23 @@
 /* CreateFence cascade over every device tier. */
 #define NPT_REGISTER_OVERRIDE_D3D12_DEVICE_ALL(m, f) \
    NPT_REGISTER_OVERRIDE(id3d12device, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device1, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device2, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device3, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device4, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device5, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device6, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device7, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device8, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device9, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device10, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device11, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device12, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device13, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device14, m, f)
+
+/* SetEventOnMultipleFenceCompletion cascade, ID3D12Device1 and up. */
+#define NPT_REGISTER_OVERRIDE_D3D12_DEVICE1_UP(m, f) \
    NPT_REGISTER_OVERRIDE(id3d12device1, m, f); \
    NPT_REGISTER_OVERRIDE(id3d12device2, m, f); \
    NPT_REGISTER_OVERRIDE(id3d12device3, m, f); \
@@ -308,6 +329,116 @@ npt_d3d12_fence_note_signal(void *fence_wrapper, UINT64 value)
    fence12_note_signal(fence12_aux(fence_wrapper), value);
 }
 
+/* The fences of one SetEventOnMultipleFenceCompletion call. */
+struct fence12_multi {
+   void *device;
+   ID3D12Fence **fences;
+   const UINT64 *values;
+   UINT count;
+   D3D12_MULTIPLE_FENCE_WAIT_FLAGS flags;
+};
+
+/* Whether the wait is over: any fence at its value (FLAG_ANY), or all of
+ * them. */
+static bool
+fence12_multi_done(const struct fence12_multi *m,
+                   bool (*reached)(void *self, uint64_t value))
+{
+   const bool any = m->flags & D3D12_MULTIPLE_FENCE_WAIT_FLAG_ANY;
+   for (UINT i = 0; i < m->count; i++) {
+      if (reached(m->fences[i], m->values[i]) == any)
+         return any;
+   }
+   return !any;
+}
+
+/* The feedback slot alone, as the SetEventOnCompletion fast path reads
+ * it: a fence without a slot, or rewound, counts as not reached. */
+static bool
+fence12_reached_snapshot(void *self, uint64_t value)
+{
+   struct npt_d3d12_fence_aux *aux = fence12_aux(self);
+   struct npt_d3d11_fence_feedback_slot *slot = fence12_slot(aux);
+   return slot && aux->base.registered &&
+          !atomic_load_explicit(&aux->rewound, memory_order_acquire) &&
+          atomic_load_explicit(&slot->completed_value,
+                               memory_order_acquire) >= value;
+}
+
+static bool
+fence12_multi_reached(void *self, uint64_t value)
+{
+   (void)value;
+   return fence12_multi_done(self, fence12_reached);
+}
+
+static bool
+fence12_multi_reached_sync(void *self, uint64_t value)
+{
+   (void)value;
+   return fence12_multi_done(self, fence12_reached_sync);
+}
+
+static void
+fence12_multi_block_arm(void *self, uint64_t value, uint64_t token)
+{
+   const struct fence12_multi *m = self;
+   (void)value;
+   npt_async_ID3D12Device1_SetEventOnMultipleFenceCompletion(
+      npt_device_method_ring(npt_com_self_device(m->device)),
+      npt_com_self_id(m->device), m->fences, m->values, m->count, m->flags,
+      (HANDLE)(uintptr_t)token);
+}
+
+static const struct npt_event_block_ops fence12_multi_block_ops = {
+   .reached = fence12_multi_reached,
+   .reached_sync = fence12_multi_reached_sync,
+   .arm = fence12_multi_block_arm,
+   .name = "d3d12 multiple",
+};
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_SetEventOnMultipleFenceCompletion_override(
+   void *self, ID3D12Fence **ppFences, const UINT64 *pFenceValues,
+   UINT NumFences, D3D12_MULTIPLE_FENCE_WAIT_FLAGS Flags, HANDLE hEvent)
+{
+   if (!ppFences || !pFenceValues || !NumFences ||
+       (Flags & ~D3D12_MULTIPLE_FENCE_WAIT_FLAG_ANY))
+      return NPT_E_INVALIDARG;
+   for (UINT i = 0; i < NumFences; i++) {
+      if (!ppFences[i])
+         return NPT_E_INVALIDARG;
+   }
+
+   struct npt_device *dev = npt_com_self_device(self);
+   struct fence12_multi m = {
+      .device = self, .fences = ppFences, .values = pFenceValues,
+      .count = NumFences, .flags = Flags,
+   };
+
+   /* NULL-event form: block guest-side, never in the host ring thread. */
+   if (!hEvent) {
+      npt_event_block_until_value(dev, &fence12_multi_block_ops, &m, 0);
+      return NPT_S_OK;
+   }
+
+   if (fence12_multi_done(&m, fence12_reached_snapshot)) {
+      SetEvent(hEvent);
+      return NPT_S_OK;
+   }
+
+   /* Event form: the host resolves the token to this arm's proxy, which
+    * the backend signals once the wait is over (see
+    * fence12_SetEventOnCompletion_override). */
+   uint64_t token = npt_event_arm(dev, (void *)hEvent);
+   if (!token)
+      return NPT_E_FAIL;
+   npt_async_ID3D12Device1_SetEventOnMultipleFenceCompletion(
+      npt_device_method_ring(dev), npt_com_self_id(self), ppFences,
+      pFenceValues, NumFences, Flags, (HANDLE)(uintptr_t)token);
+   return NPT_S_OK;
+}
+
 static HRESULT NPT_STDMETHODCALLTYPE
 dev12_CreateFence_override(void *self, UINT64 InitialValue,
                            D3D12_FENCE_FLAGS Flags, const IID *riid,
@@ -357,6 +488,9 @@ npt_overrides_d3d12_fence_init(void)
    NPT_REGISTER_OVERRIDE_D3D12_FENCE(Signal, fence12_Signal_override);
    NPT_REGISTER_OVERRIDE_D3D12_DEVICE_ALL(CreateFence,
                                           dev12_CreateFence_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE1_UP(
+      SetEventOnMultipleFenceCompletion,
+      dev12_SetEventOnMultipleFenceCompletion_override);
    npt_com_register_family(fence12_tiers,
                            sizeof(struct npt_d3d12_fence_aux),
                            npt_d3d12_fence_aux_init);
