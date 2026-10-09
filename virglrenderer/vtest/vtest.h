@@ -54,6 +54,8 @@ void vtest_destroy_context(struct vtest_context *ctx);
 
 void vtest_poll_context(struct vtest_context *ctx);
 int vtest_get_context_poll_fd(struct vtest_context *ctx);
+int vtest_get_context_liveness_fd(struct vtest_context *ctx);
+bool vtest_context_is_lost(struct vtest_context *ctx);
 
 void vtest_set_current_context(struct vtest_context *ctx);
 

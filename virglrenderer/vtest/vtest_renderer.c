@@ -869,6 +869,16 @@ int vtest_get_context_poll_fd(struct vtest_context *ctx)
    return virgl_renderer_context_get_poll_fd(ctx->ctx_id);
 }
 
+int vtest_get_context_liveness_fd(struct vtest_context *ctx)
+{
+   return virgl_renderer_context_get_liveness_fd(ctx->ctx_id);
+}
+
+bool vtest_context_is_lost(struct vtest_context *ctx)
+{
+   return virgl_renderer_context_is_lost(ctx->ctx_id);
+}
+
 void vtest_set_current_context(struct vtest_context *ctx)
 {
    renderer.current_context = ctx;

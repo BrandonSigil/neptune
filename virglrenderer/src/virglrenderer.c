@@ -471,6 +471,24 @@ int virgl_renderer_context_get_poll_fd(uint32_t ctx_id)
    return ctx->get_fencing_fd(ctx);
 }
 
+int virgl_renderer_context_get_liveness_fd(uint32_t ctx_id)
+{
+   struct virgl_context *ctx = virgl_context_lookup(ctx_id);
+   if (!ctx || !ctx->get_liveness_fd)
+      return -1;
+
+   return ctx->get_liveness_fd(ctx);
+}
+
+bool virgl_renderer_context_is_lost(uint32_t ctx_id)
+{
+   struct virgl_context *ctx = virgl_context_lookup(ctx_id);
+   if (!ctx || !ctx->is_lost)
+      return false;
+
+   return ctx->is_lost(ctx);
+}
+
 void virgl_renderer_force_ctx_0(void)
 {
    if (state.vrend_initialized)

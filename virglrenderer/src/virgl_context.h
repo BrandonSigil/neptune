@@ -142,6 +142,14 @@ struct virgl_context {
                           void *addr,
                           int32_t prot,
                           int32_t flags);
+
+   /*
+    * Optional.  Return an fd that becomes readable when the context may
+    * have been lost -- its render worker died -- or -1; is_lost tells
+    * whether it was.
+    */
+   int (*get_liveness_fd)(struct virgl_context *ctx);
+   bool (*is_lost)(struct virgl_context *ctx);
 };
 
 struct virgl_context_foreach_args {

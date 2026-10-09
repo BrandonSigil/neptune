@@ -663,6 +663,23 @@ proxy_context_destroy(struct virgl_context *base)
    free(ctx);
 }
 
+/* The worker writes to the context socket only to answer a request, and
+ * the proxy reads each answer right away: the socket turns readable between
+ * requests only when the worker is gone. */
+static int
+proxy_context_get_liveness_fd(struct virgl_context *base)
+{
+   struct proxy_context *ctx = (struct proxy_context *)base;
+   return ctx->socket.fd;
+}
+
+static bool
+proxy_context_is_lost(struct virgl_context *base)
+{
+   struct proxy_context *ctx = (struct proxy_context *)base;
+   return !proxy_socket_is_connected(&ctx->socket);
+}
+
 static void
 proxy_context_init_base(struct proxy_context *ctx)
 {
@@ -676,6 +693,9 @@ proxy_context_init_base(struct proxy_context *ctx)
    ctx->base.get_fencing_fd = proxy_context_get_fencing_fd;
    ctx->base.retire_fences = proxy_context_retire_fences;
    ctx->base.submit_fence = proxy_context_submit_fence;
+
+   ctx->base.get_liveness_fd = proxy_context_get_liveness_fd;
+   ctx->base.is_lost = proxy_context_is_lost;
 }
 
 static bool

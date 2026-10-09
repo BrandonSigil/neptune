@@ -72,8 +72,11 @@ proxy_socket_fini(struct proxy_socket *socket)
 bool
 proxy_socket_is_connected(const struct proxy_socket *socket)
 {
+   /* POLLIN as well: macOS reports a closed peer as readable at EOF, not
+    * always as POLLHUP, when no event is asked for. */
    struct pollfd poll_fd = {
       .fd = socket->fd,
+      .events = POLLIN,
    };
 
    while (true) {
@@ -91,6 +94,16 @@ proxy_socket_is_connected(const struct proxy_socket *socket)
       if (poll_fd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
          proxy_log("socket disconnected");
          return false;
+      }
+
+      if (poll_fd.revents & POLLIN) {
+         char byte;
+         const ssize_t n = recv(socket->fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+         if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+                        errno != EINTR)) {
+            proxy_log("socket disconnected");
+            return false;
+         }
       }
 
       return true;

@@ -60,6 +60,7 @@ enum vtest_client_result {
    VTEST_CLIENT_ERROR_COMMAND_ID,
    VTEST_CLIENT_ERROR_COMMAND_UNEXPECTED,
    VTEST_CLIENT_ERROR_COMMAND_DISPATCH,
+   VTEST_CLIENT_ERROR_CONTEXT_LOST,
 };
 
 struct vtest_client
@@ -74,6 +75,11 @@ struct vtest_client
    struct vtest_context *context;
    int context_poll_fd;
    bool context_need_poll;
+   /* Readable when the context's render worker may have died; the client
+    * is then dropped, which closes its connection: the guest sees the
+    * device removed instead of waiting on a ring nobody serves. */
+   int context_liveness_fd;
+   bool context_need_liveness_check;
 };
 
 struct vtest_server
@@ -388,6 +394,7 @@ static int vtest_server_add_client(int in_fd, int out_fd)
    client->input.read = vtest_block_read;
 
    client->context_poll_fd = -1;
+   client->context_liveness_fd = -1;
 
    list_addtail(&client->head, &server.new_clients);
 
@@ -491,6 +498,11 @@ static void vtest_server_wait_clients(void)
          FD_SET(client->context_poll_fd, &read_fds);
          max_fd = MAX2(client->context_poll_fd, max_fd);
       }
+
+      if (client->context_liveness_fd >= 0) {
+         FD_SET(client->context_liveness_fd, &read_fds);
+         max_fd = MAX2(client->context_liveness_fd, max_fd);
+      }
    }
 
    /* accept new clients when there is none or when multi_clients is set */
@@ -526,6 +538,11 @@ static void vtest_server_wait_clients(void)
       } else if (client->context) {
          client->context_need_poll = true;
       }
+
+      if (client->context_liveness_fd >= 0 &&
+          FD_ISSET(client->context_liveness_fd, &read_fds)) {
+         client->context_need_liveness_check = true;
+      }
    }
 
    if (server.socket >= 0 && FD_ISSET(server.socket, &read_fds)) {
@@ -553,6 +570,7 @@ static const char *vtest_client_result_string(enum vtest_client_result ret)
    CASE(VTEST_CLIENT_ERROR_COMMAND_ID)
    CASE(VTEST_CLIENT_ERROR_COMMAND_UNEXPECTED)
    CASE(VTEST_CLIENT_ERROR_COMMAND_DISPATCH)
+   CASE(VTEST_CLIENT_ERROR_CONTEXT_LOST)
 #undef CASE
    default: return "VTEST_CLIENT_ERROR_UNKNOWN";
    }
@@ -564,6 +582,17 @@ static void vtest_server_dispatch_clients(void)
 
    LIST_FOR_EACH_ENTRY_SAFE(client, tmp, &server.active_clients, head) {
       int ret;
+
+      if (client->context_need_liveness_check) {
+         client->context_need_liveness_check = false;
+         if (vtest_context_is_lost(client->context)) {
+            fprintf(stderr, "client: %s\n",
+                    vtest_client_result_string(VTEST_CLIENT_ERROR_CONTEXT_LOST));
+            list_del(&client->head);
+            list_addtail(&client->head, &server.inactive_clients);
+            continue;
+         }
+      }
 
       if (client->context_need_poll) {
          vtest_poll_context(client->context);
@@ -822,6 +851,8 @@ static int vtest_client_dispatch_commands(struct vtest_client *client)
          return VTEST_CLIENT_ERROR_CONTEXT_FAILED;
       }
       client->context_poll_fd = vtest_get_context_poll_fd(client->context);
+      client->context_liveness_fd =
+         vtest_get_context_liveness_fd(client->context);
    }
 
    vtest_set_current_context(client->context);

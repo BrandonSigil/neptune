@@ -486,6 +486,11 @@ VIRGL_EXPORT int virgl_renderer_context_create_fence(uint32_t ctx_id,
 VIRGL_EXPORT void virgl_renderer_context_poll(uint32_t ctx_id); /* force fences */
 VIRGL_EXPORT int virgl_renderer_context_get_poll_fd(uint32_t ctx_id);
 
+/* An fd that becomes readable when the context may have been lost (its
+ * render worker died), or -1; virgl_renderer_context_is_lost tells. */
+VIRGL_EXPORT int virgl_renderer_context_get_liveness_fd(uint32_t ctx_id);
+VIRGL_EXPORT bool virgl_renderer_context_is_lost(uint32_t ctx_id);
+
 /* Map a resource to an specific userspace address. If successful, the
  * mapping is owned by the caller and is its responsibility to unmap
  * the resource by its own means (i.e. overriding the map with
