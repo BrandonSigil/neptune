@@ -32,6 +32,8 @@
 #define NPT_DXGI_ERROR_NOT_FOUND    ((HRESULT)0x887A0002)
 #define NPT_DXGI_ERROR_MORE_DATA    ((HRESULT)0x887A0003)
 #define NPT_DXGI_ERROR_UNSUPPORTED  ((HRESULT)0x887A0004)
+#define NPT_DXGI_ERROR_DEVICE_REMOVED ((HRESULT)0x887A0005)
+#define NPT_DXGI_ERROR_DRIVER_INTERNAL_ERROR ((HRESULT)0x887A0020)
 #define NPT_DXGI_ERROR_NOT_CURRENTLY_AVAILABLE ((HRESULT)0x887A0022)
 /* Success-range status (high bit clear): a fullscreen/windowed transition
  * is already running on another thread. */
@@ -208,6 +210,10 @@ struct npt_ring_submit_command {
    /* Captured at submit; sync thunks free cmd_data before reply, so
     * re-reading would be UAF.  Only written when profiling is on. */
    uint32_t prof_cmd_type;
+
+   /* The command's cmd_type, captured at submit: the reply a lost device
+    * answers in the host's place carries it (npt_ring_get_command_reply). */
+   uint32_t cmd_type;
 };
 
 struct npt_cs_encoder *

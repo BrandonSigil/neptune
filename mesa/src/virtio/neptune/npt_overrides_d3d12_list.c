@@ -43,11 +43,6 @@
 #include "npt_ring.h"
 #include "npt_tls.h"
 
-/* Close reports device removal when its recording could not reach the
- * host; a genuine host-side recording error still surfaces as a decoder
- * fatal (async model). */
-#define NPT_DXGI_ERROR_DEVICE_REMOVED ((HRESULT)0x887A0005L)
-
 #include "neptune-protocol/npt_protocol_client_id3d12commandallocator.h"
 #include "neptune-protocol/npt_protocol_client_id3d12device.h"
 #include "neptune-protocol/npt_protocol_client_id3d12graphicscommandlist.h"

@@ -14,26 +14,32 @@ void
 npt_vtest_proto_read(struct npt_vtest_protocol *p, void *buf, size_t size)
 {
    uint8_t *ptr = buf;
-   while (size) {
+   while (size && !p->dead) {
       long r = p->transport->read(p->transport_ctx, ptr, size);
       if (r <= 0) {
-         npt_log("vtest read failed: r=%ld, remaining=%zu", r, size);
-         abort();
+         npt_log("vtest read failed: r=%ld, remaining=%zu -- connection lost",
+                 r, size);
+         p->dead = true;
+         break;
       }
       ptr += r;
       size -= r;
    }
+   if (size)
+      memset(ptr, 0, size);
 }
 
 void
 npt_vtest_proto_write(struct npt_vtest_protocol *p, const void *buf, size_t size)
 {
    const uint8_t *ptr = buf;
-   while (size) {
+   while (size && !p->dead) {
       long r = p->transport->write(p->transport_ctx, ptr, size);
       if (r <= 0) {
-         npt_log("vtest write failed: r=%ld, remaining=%zu", r, size);
-         abort();
+         npt_log("vtest write failed: r=%ld, remaining=%zu -- connection lost",
+                 r, size);
+         p->dead = true;
+         break;
       }
       ptr += r;
       size -= r;
@@ -126,6 +132,8 @@ npt_vtest_vcmd_get_capset(struct npt_vtest_protocol *p,
 
    uint32_t valid;
    npt_vtest_proto_read(p, &valid, sizeof(valid));
+   if (p->dead || !h[VTEST_CMD_LEN])
+      return false;
    size_t read_size = (h[VTEST_CMD_LEN] - 1) * 4;
    if (!valid) {
       while (read_size > 0) {
@@ -184,6 +192,10 @@ npt_vtest_vcmd_resource_create_blob(struct npt_vtest_protocol *p,
    npt_vtest_proto_read(p, h, sizeof(h));
    uint32_t res_id;
    npt_vtest_proto_read(p, &res_id, sizeof(res_id));
+   if (p->dead) {
+      *out_fd = -1;
+      return 0;
+   }
 
    *out_fd = p->transport->receive_fd(p->transport_ctx);
 

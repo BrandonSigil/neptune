@@ -199,6 +199,12 @@ npt_gsc_make_token(void);
 void
 npt_gsc_frame_latency_release(struct npt_guest_swapchain_common *c);
 
+/* The device is gone (npt_renderer_is_lost): Present reports
+ * DXGI_ERROR_DEVICE_REMOVED and still advances the frame-latency waitable,
+ * so an app that waits on it before its next Present does not hang. */
+bool
+npt_gsc_device_removed(struct npt_guest_swapchain_common *c);
+
 void
 npt_gsc_backpressure_wait(struct npt_guest_swapchain_common *c);
 

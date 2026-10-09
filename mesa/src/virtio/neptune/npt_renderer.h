@@ -221,6 +221,14 @@ struct npt_renderer_ops {
     */
    uint64_t (*arm_gate_fence)(struct npt_renderer *renderer,
                               uint32_t ring_idx);
+
+   /*
+    * Optional (vtest): false once the render server no longer serves this
+    * context -- its render worker died and the server closed the
+    * connection.  A dead worker leaves the ring head where it was, so the
+    * ring waits ask this now and then (npt_ring.c).  Must not block.
+    */
+   bool (*check_alive)(struct npt_renderer *renderer);
 };
 
 struct npt_renderer {
@@ -260,6 +268,9 @@ struct npt_renderer {
     * the device destroy waits for this to drop to 0 before it destroys
     * the transport those destroys still write to. */
    _Atomic uint32_t reaps_pending;
+
+   /* os_time_get_nano() of the last ops.check_alive (npt_ring.c). */
+   _Atomic int64_t alive_checked_ns;
 };
 
 static inline bool

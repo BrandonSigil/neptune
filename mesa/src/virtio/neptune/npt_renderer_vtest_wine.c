@@ -85,6 +85,17 @@ struct npt_vtest {
    int sock_fd;
 };
 
+/* Ends an exchange begun with EnterCriticalSection(&v->sock_cs): a
+ * connection the exchange found dead is a lost device. */
+static void
+npt_vtest_leave(struct npt_vtest *v)
+{
+   const bool dead = v->proto.dead;
+   LeaveCriticalSection(&v->sock_cs);
+   if (dead)
+      npt_renderer_set_lost(&v->base);
+}
+
 static struct npt_renderer_shmem *
 npt_vtest_shmem_create(struct npt_renderer *r, size_t sz)
 {
@@ -95,7 +106,7 @@ npt_vtest_shmem_create(struct npt_renderer *r, size_t sz)
    uint32_t rid = npt_vtest_vcmd_resource_create_blob(
       &v->proto, VCMD_BLOB_TYPE_HOST3D_GUEST, VCMD_BLOB_FLAG_MAPPABLE,
       sz, 0, &fd);
-   LeaveCriticalSection(&v->sock_cs);
+   npt_vtest_leave(v);
 
    if (fd < 0) {
       npt_log("shmem_create: failed to receive memfd");
@@ -109,7 +120,7 @@ npt_vtest_shmem_create(struct npt_renderer *r, size_t sz)
       npt_log("shmem_create: mmap failed");
       EnterCriticalSection(&v->sock_cs);
       npt_vtest_vcmd_resource_unref(&v->proto, rid);
-      LeaveCriticalSection(&v->sock_cs);
+      npt_vtest_leave(v);
       return NULL;
    }
 
@@ -118,7 +129,7 @@ npt_vtest_shmem_create(struct npt_renderer *r, size_t sz)
       npt_wine_unixlib_munmap(ptr, sz);
       EnterCriticalSection(&v->sock_cs);
       npt_vtest_vcmd_resource_unref(&v->proto, rid);
-      LeaveCriticalSection(&v->sock_cs);
+      npt_vtest_leave(v);
       return NULL;
    }
    npt_refcount_init(&s->refcount);
@@ -136,7 +147,7 @@ npt_vtest_shmem_destroy(struct npt_renderer *r, struct npt_renderer_shmem *s)
    npt_wine_unixlib_munmap(s->mmap_ptr, s->size);
    EnterCriticalSection(&v->sock_cs);
    npt_vtest_vcmd_resource_unref(&v->proto, s->res_id);
-   LeaveCriticalSection(&v->sock_cs);
+   npt_vtest_leave(v);
    free(s);
 }
 
@@ -155,7 +166,7 @@ npt_vtest_create_host_blob(struct npt_renderer *r,
       size,
       blob_id,
       &fd);
-   LeaveCriticalSection(&v->sock_cs);
+   npt_vtest_leave(v);
 
    (void)res_id;
 
@@ -173,8 +184,9 @@ npt_vtest_submit_cmd(struct npt_renderer *r, const void *data, size_t sz)
    struct npt_vtest *v = (struct npt_vtest *)r;
    EnterCriticalSection(&v->sock_cs);
    npt_vtest_vcmd_submit_cmd(&v->proto, data, sz);
-   LeaveCriticalSection(&v->sock_cs);
-   return true;
+   const bool ok = !v->proto.dead;
+   npt_vtest_leave(v);
+   return ok;
 }
 
 /* Empty SUBMIT_CMD2 batch with OUT_FENCE_FD + RING_IDX; fd via
@@ -203,10 +215,36 @@ npt_vtest_submit_present_fence(struct npt_renderer *r, uint32_t ring_idx)
    npt_vtest_proto_write(&v->proto, hdr, sizeof(hdr));
    npt_vtest_proto_write(&v->proto, &batch_count, sizeof(batch_count));
    npt_vtest_proto_write(&v->proto, &batch, sizeof(batch));
-   int fd = v->proto.transport->receive_fd(v->proto.transport_ctx);
-   LeaveCriticalSection(&v->sock_cs);
+   int fd = v->proto.dead
+      ? -1 : v->proto.transport->receive_fd(v->proto.transport_ctx);
+   npt_vtest_leave(v);
 
    return fd;
+}
+
+/* The server closes the connection when the context's render worker dies.
+ * Every reply is read under sock_cs, so while we hold it nothing is due on
+ * the socket: readable means closed, or out of step, which is as fatal. */
+static bool
+npt_vtest_check_alive(struct npt_renderer *r)
+{
+   struct npt_vtest *v = (struct npt_vtest *)r;
+   if (!TryEnterCriticalSection(&v->sock_cs))
+      return true;
+   if (!v->proto.dead) {
+      struct npt_unix_wait_fd_params p = {
+         .fd = v->sock_fd, .timeout_ms = 0, .result = 0,
+      };
+      npt_wine_unix_call(npt_unix_wait_fd, &p);
+      if (p.result != 0) {
+         npt_log("vtest: the render server closed the connection -- "
+                 "device removed");
+         v->proto.dead = true;
+      }
+   }
+   const bool alive = !v->proto.dead;
+   npt_vtest_leave(v);
+   return alive;
 }
 
 static void
@@ -289,6 +327,7 @@ npt_renderer_create_vtest(void)
    v->base.ops.submit_cmd_sync = npt_vtest_submit_cmd;
    v->base.ops.create_host_blob = npt_vtest_create_host_blob;
    v->base.ops.submit_present_fence = npt_vtest_submit_present_fence;
+   v->base.ops.check_alive = npt_vtest_check_alive;
    npt_wine_install_wsi_ops(&v->base.ops);
    v->base.shmem_ops.create = npt_vtest_shmem_create;
    v->base.shmem_ops.destroy = npt_vtest_shmem_destroy;

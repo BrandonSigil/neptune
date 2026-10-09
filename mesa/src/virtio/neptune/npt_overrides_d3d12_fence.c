@@ -15,6 +15,8 @@
  *  - Device1::SetEventOnMultipleFenceCompletion takes the same paths as
  *    SetEventOnCompletion: the NULL-event form blocks guest-side, the
  *    event form arms a host proxy and sends its token in the HANDLE slot.
+ *  - On a removed device (npt_renderer_is_lost) every fence reads
+ *    UINT64_MAX, as D3D12 specifies, so waits end instead of hanging.
  */
 
 #include <stdatomic.h>
@@ -194,6 +196,13 @@ npt_d3d12_fence_finalize_create(struct npt_device *dev, void *wrapper,
       aux->base.registered = true;
 }
 
+static bool
+fence12_device_removed(void *self)
+{
+   const struct npt_device *dev = npt_com_self_device(self);
+   return dev && dev->renderer && npt_renderer_is_lost(dev->renderer);
+}
+
 /* NULL on wrappers that bypassed CreateFence; QI tier aliases resolve
  * to the primary's aux (and thus its registered feedback slot). */
 static struct npt_d3d12_fence_aux *
@@ -214,6 +223,8 @@ fence12_slot(struct npt_d3d12_fence_aux *aux)
 static UINT64 NPT_STDMETHODCALLTYPE
 fence12_GetCompletedValue_override(void *self)
 {
+   if (fence12_device_removed(self))
+      return UINT64_MAX;
    struct npt_d3d12_fence_aux *aux = fence12_aux(self);
    struct npt_d3d11_fence_feedback_slot *slot = fence12_slot(aux);
    if (!slot || !aux->base.registered ||
@@ -232,6 +243,8 @@ fence12_GetCompletedValue_override(void *self)
 static bool
 fence12_reached(void *self, uint64_t value)
 {
+   if (fence12_device_removed(self))
+      return true;
    struct npt_d3d12_fence_aux *aux = fence12_aux(self);
    struct npt_d3d11_fence_feedback_slot *slot = fence12_slot(aux);
    if (slot && aux->base.registered &&
@@ -247,7 +260,8 @@ fence12_reached(void *self, uint64_t value)
 static bool
 fence12_reached_sync(void *self, uint64_t value)
 {
-   return npt_id3d12fence_default_GetCompletedValue(self) >= value;
+   return fence12_device_removed(self) ||
+          npt_id3d12fence_default_GetCompletedValue(self) >= value;
 }
 
 static void
@@ -276,6 +290,11 @@ fence12_SetEventOnCompletion_override(void *self, UINT64 Value, HANDLE hEvent)
     * blocking SEOC(NULL). */
    if (!hEvent) {
       npt_event_block_until_value(dev, &fence12_block_ops, self, Value);
+      return NPT_S_OK;
+   }
+
+   if (fence12_device_removed(self)) {
+      SetEvent(hEvent);
       return NPT_S_OK;
    }
 
@@ -422,7 +441,8 @@ dev12_SetEventOnMultipleFenceCompletion_override(
       return NPT_S_OK;
    }
 
-   if (fence12_multi_done(&m, fence12_reached_snapshot)) {
+   if (fence12_device_removed(self) ||
+       fence12_multi_done(&m, fence12_reached_snapshot)) {
       SetEvent(hEvent);
       return NPT_S_OK;
    }

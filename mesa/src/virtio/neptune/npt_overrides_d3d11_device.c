@@ -597,6 +597,17 @@ dev3_GetImmediateContext3_override(void *self,
    dev_get_immediate_context_cached(self, 3, (void **)ppImmediateContext);
 }
 
+/* DXGI_ERROR_DRIVER_INTERNAL_ERROR once the render server no longer serves
+ * the context (npt_renderer_is_lost); otherwise the host's answer. */
+static HRESULT NPT_STDMETHODCALLTYPE
+dev_GetDeviceRemovedReason_override(void *self)
+{
+   const struct npt_device *dev = npt_com_self_device(self);
+   if (dev && dev->renderer && npt_renderer_is_lost(dev->renderer))
+      return NPT_DXGI_ERROR_DRIVER_INTERNAL_ERROR;
+   return npt_id3d11device_default_GetDeviceRemovedReason(self);
+}
+
 void
 npt_overrides_d3d11_device_init(void)
 {
@@ -610,6 +621,8 @@ npt_overrides_d3d11_device_init(void)
                                        dev_CreateTexture3D_override);
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE (GetImmediateContext,
                                        dev_GetImmediateContext_override);
+   NPT_REGISTER_OVERRIDE_D3D11_DEVICE (GetDeviceRemovedReason,
+                                       dev_GetDeviceRemovedReason_override);
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE1(GetImmediateContext1,
                                        dev1_GetImmediateContext1_override);
    NPT_REGISTER_OVERRIDE_D3D11_DEVICE2(GetImmediateContext2,

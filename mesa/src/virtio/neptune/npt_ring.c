@@ -10,10 +10,10 @@
 #include "npt_tls.h"
 
 #include "util/os_misc.h"
+#include "util/os_time.h"
 #ifndef _WIN32
 #include <errno.h>
 #include <sys/resource.h>
-#include "util/os_time.h"
 #endif
 
 #if defined(__x86_64__) || defined(__i386__)
@@ -181,6 +181,37 @@ npt_ring_relax(struct npt_ring *ring, uint32_t *iter)
    }
 }
 
+/* Ring waits past the busy-wait phase ask the transport whether the context
+ * is still served, at most every NPT_RING_ALIVE_CHECK_NS: a render worker
+ * that died leaves head where it was, and nothing else would end the wait. */
+#define NPT_RING_ALIVE_CHECK_ITER 256
+#define NPT_RING_ALIVE_CHECK_NS (100ll * 1000 * 1000)
+
+static bool
+npt_ring_renderer_lost(struct npt_ring *ring, uint32_t iter)
+{
+   struct npt_renderer *renderer = ring->renderer;
+   if (!renderer)
+      return false;
+   if (npt_renderer_is_lost(renderer))
+      return true;
+   if (iter < NPT_RING_ALIVE_CHECK_ITER || !renderer->ops.check_alive)
+      return false;
+
+   const int64_t now = os_time_get_nano();
+   int64_t last = atomic_load_explicit(&renderer->alive_checked_ns,
+                                       memory_order_relaxed);
+   if (now - last < NPT_RING_ALIVE_CHECK_NS ||
+       !atomic_compare_exchange_strong_explicit(
+          &renderer->alive_checked_ns, &last, now, memory_order_relaxed,
+          memory_order_relaxed))
+      return false;
+   if (renderer->ops.check_alive(renderer))
+      return false;
+   npt_renderer_set_lost(renderer);
+   return true;
+}
+
 void
 npt_ring_get_layout(size_t buf_size, size_t extra_size,
                     struct npt_ring_layout *layout)
@@ -339,7 +370,7 @@ npt_ring_wait_space(struct npt_ring *ring, uint32_t size)
    while (!npt_ring_has_space(ring, size)) {
       if (npt_ring_load_status(ring) & NPT_RING_STATUS_FATAL_BIT)
          return false;
-      if (ring->renderer && npt_renderer_is_lost(ring->renderer))
+      if (npt_ring_renderer_lost(ring, iter))
          return false;
       if (iter && (iter & 0x7fff) == 0) {
          const uint32_t head =
@@ -532,7 +563,7 @@ npt_ring_wait_all(struct npt_ring *ring)
       const uint32_t status = npt_ring_load_status(ring);
       if (status & NPT_RING_STATUS_FATAL_BIT)
          return;
-      if (ring->renderer && npt_renderer_is_lost(ring->renderer))
+      if (npt_ring_renderer_lost(ring, iter))
          return;
       /* The ALIVE watchdog is off here (NULL relax; see comment
        * above), which made a TDR mapping-teardown a SILENT hang.
@@ -575,7 +606,7 @@ npt_ring_wait_seqno(struct npt_ring *ring, uint32_t seqno)
    while (!npt_ring_seqno_status(ring, seqno)) {
       if (npt_ring_load_status(ring) & NPT_RING_STATUS_FATAL_BIT)
          return iter;
-      if (ring->renderer && npt_renderer_is_lost(ring->renderer))
+      if (npt_ring_renderer_lost(ring, iter))
          return iter;
       /* Log once per ~32k iters so a wedged caller's target seqno is
        * recoverable from the log alongside the ring's own watchdog. */
@@ -933,6 +964,7 @@ npt_ring_submit_command_init(struct npt_ring *ring,
    submit->reply_offset = 0;
    submit->seqno = 0;
    submit->prof_cmd_type = 0;
+   submit->cmd_type = 0;
    return &submit->enc;
 }
 
@@ -942,6 +974,10 @@ npt_ring_submit_command(struct npt_ring *ring,
 {
    if (!submit->cmd_size || !submit->cmd_data)
       return;
+
+   /* Every command and reply header starts with its cmd_type. */
+   if (submit->cmd_size >= sizeof(submit->cmd_type))
+      memcpy(&submit->cmd_type, submit->cmd_data, sizeof(submit->cmd_type));
 
    /* prof_cmd_type stashes cmd_type so get_command_reply can attribute
     * reply_ns -- sync thunks free cmd_data before the reply arrives. */
@@ -1011,12 +1047,37 @@ npt_ring_submit_command(struct npt_ring *ring,
    npt_profile_submit_finalize(&ring->profile, &prof);
 }
 
+/* The reply of a device that is gone: zeros under a header that carries the
+ * command's cmd_type and DXGI_ERROR_DEVICE_REMOVED, so generated decoders
+ * and the hand-written readers alike return that to the app.  It lives in
+ * the decoder's temp pool, which npt_ring_free_command_reply frees. */
+static struct npt_cs_decoder *
+npt_ring_removed_reply(struct npt_ring_submit_command *submit)
+{
+   uint8_t *reply = npt_cs_decoder_alloc_temp(&submit->dec, submit->reply_size);
+   if (!reply)
+      return NULL;
+   memset(reply, 0, submit->reply_size);
+   const struct npt_reply_header header = {
+      .cmd_type = submit->cmd_type,
+      .cmd_return = (uint32_t)NPT_DXGI_ERROR_DEVICE_REMOVED,
+   };
+   memcpy(reply, &header, submit->reply_size < sizeof(header)
+                             ? submit->reply_size : sizeof(header));
+   submit->dec.cur = reply;
+   submit->dec.end = reply + submit->reply_size;
+   return &submit->dec;
+}
+
 struct npt_cs_decoder *
 npt_ring_get_command_reply(struct npt_ring *ring,
                            struct npt_ring_submit_command *submit)
 {
    if (!submit->reply_size)
       return NULL;
+
+   if (ring->renderer && npt_renderer_is_lost(ring->renderer))
+      return npt_ring_removed_reply(submit);
 
    if (!submit->reply_shmem)
       return NULL;
@@ -1038,8 +1099,10 @@ npt_ring_get_command_reply(struct npt_ring *ring,
    }
    if (npt_ring_load_status(ring) & NPT_RING_STATUS_FATAL_BIT) {
       npt_log("ring fatal while waiting for reply");
-      return NULL;
+      return npt_ring_removed_reply(submit);
    }
+   if (ring->renderer && npt_renderer_is_lost(ring->renderer))
+      return npt_ring_removed_reply(submit);
 
    const uint8_t *reply_base = (const uint8_t *)submit->reply_shmem->mmap_ptr
                                + submit->reply_offset;

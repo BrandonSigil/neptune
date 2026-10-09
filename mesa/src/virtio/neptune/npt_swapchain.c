@@ -210,6 +210,9 @@ gsc_present_common(void *self, UINT SyncInterval, UINT Flags)
    struct npt_guest_swapchain *s = gsc(self);
    struct npt_guest_swapchain_common *c = &s->base;
 
+   if (npt_gsc_device_removed(c))
+      return NPT_DXGI_ERROR_DEVICE_REMOVED;
+
    if (Flags & NPT_DXGI_PRESENT_TEST)
       return (c->wsi_failed || c->occluded_streak >= NPT_SC_OCCLUDED_STREAK)
                 ? NPT_DXGI_STATUS_OCCLUDED : NPT_S_OK;

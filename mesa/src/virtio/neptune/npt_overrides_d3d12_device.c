@@ -23,6 +23,8 @@
  *    pipeline state stream travels subobject by subobject, so one the
  *    encoder cannot walk is refused here with E_INVALIDARG, as D3D12
  *    refuses it.
+ *  - GetDeviceRemovedReason: DXGI_ERROR_DRIVER_INTERNAL_ERROR once the
+ *    render server no longer serves the context (npt_renderer_is_lost).
  */
 
 #include "npt_com.h"
@@ -655,6 +657,15 @@ pipelinelibrary12_LoadPipeline_override(
                                                           ppPipelineState);
 }
 
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_GetDeviceRemovedReason_override(void *self)
+{
+   const struct npt_device *dev = npt_com_self_device(self);
+   if (dev && dev->renderer && npt_renderer_is_lost(dev->renderer))
+      return NPT_DXGI_ERROR_DRIVER_INTERNAL_ERROR;
+   return npt_id3d12device_default_GetDeviceRemovedReason(self);
+}
+
 void
 npt_overrides_d3d12_device_init(void)
 {
@@ -662,6 +673,8 @@ npt_overrides_d3d12_device_init(void)
                                       dev12_CheckFeatureSupport_override);
    NPT_REGISTER_OVERRIDE_D3D12_DEVICE(CreateCommandQueue,
                                       dev12_CreateCommandQueue_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE(GetDeviceRemovedReason,
+                                      dev12_GetDeviceRemovedReason_override);
    NPT_REGISTER_OVERRIDE_D3D12_DEVICE2(CreatePipelineState,
                                        dev12_CreatePipelineState_override);
    NPT_REGISTER_OVERRIDE(id3d12pipelinelibrary1, LoadPipeline,

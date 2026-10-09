@@ -20,14 +20,18 @@ struct npt_vtest_transport_ops {
    int  (*receive_fd)(void *ctx);
 };
 
-/* protocol_version is filled in by the handshake. */
+/* protocol_version is filled in by the handshake.  dead is set once a
+ * read or write fails (the server closed the connection: the context's
+ * render worker died, or the server exited); reads then return zeros and
+ * writes do nothing, and the backend reports its renderer lost. */
 struct npt_vtest_protocol {
    const struct npt_vtest_transport_ops *transport;
    void *transport_ctx;
    uint32_t protocol_version;
+   bool dead;
 };
 
-/* Abort on fatal: socket is gone, no recovery. */
+/* A failure marks the protocol dead; nothing is ever retried. */
 void npt_vtest_proto_read(struct npt_vtest_protocol *p,
                           void *buf, size_t size);
 void npt_vtest_proto_write(struct npt_vtest_protocol *p,

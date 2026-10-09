@@ -173,6 +173,16 @@ npt_gsc_frame_latency_release(struct npt_guest_swapchain_common *c)
       ReleaseSemaphore(c->frame_latency_sem, 1, NULL);
 }
 
+bool
+npt_gsc_device_removed(struct npt_guest_swapchain_common *c)
+{
+   const struct npt_device *dev = c->com ? c->com->base.device : NULL;
+   if (!dev || !dev->renderer || !npt_renderer_is_lost(dev->renderer))
+      return false;
+   npt_gsc_frame_latency_release(c);
+   return true;
+}
+
 static DWORD WINAPI
 npt_gsc_wsi_thread(LPVOID arg)
 {
