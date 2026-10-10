@@ -441,6 +441,33 @@ npt_context_query_interface(struct npt_context *ctx,
    return hr;
 }
 
+uint32_t
+npt_context_query_version(struct npt_context *ctx, uint64_t guest_id,
+                          const GUID *iids, uint32_t count)
+{
+   void *obj = npt_context_lookup_object(ctx, NULL, guest_id,
+                                         NPT_OBJECT_TYPE_IUNKNOWN);
+   if (!obj)
+      return NPT_COM_QUERY_VERSION_NONE;
+
+   for (uint32_t i = 0; i < count; i++) {
+      void *out = NULL;
+      if (NPT_FAILED(npt_com_query_interface(obj, &iids[i], &out)) || !out)
+         continue;
+      /* The guest keeps calling through this id, so the version only
+       * counts when the object hands it out at the registered pointer:
+       * single-inheritance COM, one vtable for every version. */
+      const bool same = out == obj;
+      npt_com_release(out);
+      if (!same)
+         continue;
+      npt_context_register_object(ctx, guest_id, obj,
+                                  npt_object_type_from_iid(&iids[i]));
+      return i;
+   }
+   return NPT_COM_QUERY_VERSION_NONE;
+}
+
 /* Out-of-line because npt_cs.h must not include npt_context.h
  * (header cycle through the generated dispatch types). */
 void *

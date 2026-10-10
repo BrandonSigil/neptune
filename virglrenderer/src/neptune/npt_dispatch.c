@@ -317,6 +317,41 @@ npt_dispatch_com_query_interface(struct npt_context *ctx,
 }
 
 static void
+npt_dispatch_com_query_version(struct npt_context *ctx,
+                               struct npt_cs_decoder *dec,
+                               struct npt_cs_encoder *enc,
+                               const struct npt_command_header *header)
+{
+   struct npt_cmd_com_query_version cmd;
+   cmd.header = *header;
+   npt_cs_decoder_read(dec, sizeof(cmd) - sizeof(cmd.header),
+                       &cmd.count, sizeof(cmd) - sizeof(cmd.header));
+   if (npt_cs_decoder_get_fatal(dec))
+      return;
+   if (cmd.count > NPT_COM_QUERY_VERSION_MAX_IIDS) {
+      npt_log("COM_QUERY_VERSION: %u IIDs, more than %u", cmd.count,
+              NPT_COM_QUERY_VERSION_MAX_IIDS);
+      npt_cs_decoder_set_fatal(dec);
+      return;
+   }
+
+   const uint32_t index = npt_context_query_version(
+      ctx, header->object_id, cmd.iids, cmd.count);
+
+   struct npt_cmd_com_query_version_reply reply;
+   memset(&reply, 0, sizeof(reply));
+   reply.header.cmd_type = header->cmd_type;
+   reply.header.cmd_return = index;
+
+   if (header->cmd_flags & NPT_CMD_FLAG_REPLY) {
+      if (npt_cs_encoder_acquire(enc)) {
+         npt_cs_encoder_write(enc, sizeof(reply), &reply, sizeof(reply));
+         npt_cs_encoder_release(enc);
+      }
+   }
+}
+
+static void
 npt_dispatch_map_resource(struct npt_context *ctx,
                           struct npt_cs_decoder *dec,
                           struct npt_cs_encoder *enc,
@@ -600,6 +635,9 @@ npt_dispatch_subgroup_com(struct npt_context *ctx,
       return true;
    case NPT_TRANSPORT_COM_QUERY_INTERFACE:
       npt_dispatch_com_query_interface(ctx, dec, enc, header);
+      return true;
+   case NPT_TRANSPORT_COM_QUERY_VERSION:
+      npt_dispatch_com_query_version(ctx, dec, enc, header);
       return true;
    default:
       return false;

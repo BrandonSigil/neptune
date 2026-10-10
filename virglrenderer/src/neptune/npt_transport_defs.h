@@ -161,6 +161,7 @@ struct npt_cmd_wait_virtqueue_seqno {
 
 #define NPT_TRANSPORT_COM_RELEASE         0u
 #define NPT_TRANSPORT_COM_QUERY_INTERFACE 1u
+#define NPT_TRANSPORT_COM_QUERY_VERSION   2u
 
 /* Sent when the guest wrapper refcount hits zero.  object_id lives
  * in header.object_id; no extra payload. */
@@ -179,6 +180,28 @@ struct npt_cmd_com_query_interface {
 };
 
 struct npt_cmd_com_query_interface_reply {
+   struct npt_reply_header header;
+};
+
+/* Synchronous: which versions of an interface family the object
+ * header.object_id implements.  `iids` lists the versions highest
+ * first; the reply's cmd_return is the index of the first one the
+ * object answers through its own pointer, or
+ * NPT_COM_QUERY_VERSION_NONE.  The host keeps no new reference and
+ * registers no new id: on success the object's registered type moves up
+ * to that version, since its wrapper is about to call that version's
+ * methods.  Advertised by NPT_CAPSET_CAP_COM_QUERY_VERSION. */
+#define NPT_COM_QUERY_VERSION_MAX_IIDS 16u
+#define NPT_COM_QUERY_VERSION_NONE     0xffffffffu
+
+struct npt_cmd_com_query_version {
+   struct npt_command_header header;
+   uint32_t count;
+   uint32_t pad;
+   GUID iids[NPT_COM_QUERY_VERSION_MAX_IIDS];
+};
+
+struct npt_cmd_com_query_version_reply {
    struct npt_reply_header header;
 };
 

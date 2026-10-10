@@ -108,7 +108,8 @@ npt_get_capset(void *capset, UNUSED uint32_t flags)
       c->wire_format_version = NPT_PROTOCOL_WIRE_VERSION;
       if (d3d12_state == 2)
          c->caps_flags |= VIRGL_RENDERER_CAPSET_NEPTUNE_CAP_D3D12;
-      c->caps_flags |= npt_capset_backend_caps();
+      c->caps_flags |= npt_capset_backend_caps() |
+                       VIRGL_RENDERER_CAPSET_NEPTUNE_CAP_COM_QUERY_VERSION;
 
       const long override = npt_capset_caps_override();
       if (override >= 0)

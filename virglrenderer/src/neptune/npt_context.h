@@ -386,4 +386,12 @@ npt_context_query_interface(struct npt_context *ctx,
                             const GUID *riid,
                             uint64_t new_guest_id);
 
+/* COM_QUERY_VERSION: index of the first of `iids` the object `guest_id`
+ * implements through its registered pointer, or
+ * NPT_COM_QUERY_VERSION_NONE.  On success the registered type moves up
+ * to that interface. */
+uint32_t
+npt_context_query_version(struct npt_context *ctx, uint64_t guest_id,
+                          const GUID *iids, uint32_t count);
+
 #endif /* NPT_CONTEXT_H */

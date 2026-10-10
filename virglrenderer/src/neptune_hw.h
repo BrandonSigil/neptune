@@ -36,4 +36,9 @@ struct virgl_renderer_capset_neptune {
  * DXMT, whose shader front end parses DXBC only. */
 #define VIRGL_RENDERER_CAPSET_NEPTUNE_CAP_DXIL                        (1u << 6)
 
+/* The context answers NPT_TRANSPORT_COM_QUERY_VERSION: the highest
+ * version of an interface family a host object implements, in one round
+ * trip.  Independent of the backend. */
+#define VIRGL_RENDERER_CAPSET_NEPTUNE_CAP_COM_QUERY_VERSION           (1u << 7)
+
 #endif /* NEPTUNE_HW_H */
