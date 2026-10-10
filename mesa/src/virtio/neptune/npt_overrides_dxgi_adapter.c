@@ -25,6 +25,7 @@
 #include "nptunix/npt_unixlib.h"
 #endif
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -159,6 +160,30 @@ adp3_UnregisterHardwareContentProtectionTeardownStatus_override(
    (void)self; (void)dwCookie;
 }
 
+/* The host cannot signal a guest event (an unregistered HANDLE reaches it
+ * as NULL), and nothing here changes the budget QueryVideoMemoryInfo
+ * reports, so the registration succeeds and the event is never set: what
+ * Windows does while the budget holds still. */
+static _Atomic DWORD adp3_budget_cookie;
+
+static HRESULT NPT_STDMETHODCALLTYPE
+adp3_RegisterVideoMemoryBudgetChangeNotificationEvent_override(
+   void *self, HANDLE hEvent, DWORD *pdwCookie)
+{
+   (void)self;
+   if (!hEvent || !pdwCookie)
+      return NPT_DXGI_ERROR_INVALID_CALL;
+   *pdwCookie = atomic_fetch_add(&adp3_budget_cookie, 1) + 1;
+   return NPT_S_OK;
+}
+
+static void NPT_STDMETHODCALLTYPE
+adp3_UnregisterVideoMemoryBudgetChangeNotification_override(void *self,
+                                                            DWORD dwCookie)
+{
+   (void)self; (void)dwCookie;
+}
+
 #define NPT_REGISTER_OVERRIDE_DXGI_ADAPTER4(m, f) \
    NPT_REGISTER_OVERRIDE(idxgiadapter4, m, f)
 #define NPT_REGISTER_OVERRIDE_DXGI_ADAPTER3(m, f) \
@@ -191,6 +216,12 @@ npt_overrides_dxgi_adapter_init(void)
    NPT_REGISTER_OVERRIDE_DXGI_ADAPTER3(
       UnregisterHardwareContentProtectionTeardownStatus,
       adp3_UnregisterHardwareContentProtectionTeardownStatus_override);
+   NPT_REGISTER_OVERRIDE_DXGI_ADAPTER3(
+      RegisterVideoMemoryBudgetChangeNotificationEvent,
+      adp3_RegisterVideoMemoryBudgetChangeNotificationEvent_override);
+   NPT_REGISTER_OVERRIDE_DXGI_ADAPTER3(
+      UnregisterVideoMemoryBudgetChangeNotification,
+      adp3_UnregisterVideoMemoryBudgetChangeNotification_override);
 
    npt_com_register_family(adapter_tiers,
                            sizeof(struct npt_adapter_aux),
