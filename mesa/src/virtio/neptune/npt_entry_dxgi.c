@@ -104,3 +104,30 @@ CreateDXGIFactory2(UINT flags, REFIID riid, void **ppFactory)
                                      &NPT_IID_IDXGIFactory2, raw, hr,
                                      ppFactory);
 }
+
+/* No DXGI debug layer: what Windows answers without the Graphics Tools.
+ * Exported so an executable importing them still loads. */
+HRESULT NPT_API
+DXGIGetDebugInterface1(UINT Flags, REFIID riid, void **pDebug);
+HRESULT NPT_API
+DXGIDeclareAdapterRemovalSupport(void);
+
+HRESULT NPT_API
+DXGIGetDebugInterface1(UINT Flags, REFIID riid, void **pDebug)
+{
+   (void)Flags;
+   (void)riid;
+   if (pDebug)
+      *pDebug = NULL;
+   return NPT_E_NOINTERFACE;
+}
+
+/* The first call succeeds, later ones answer DXGI_ERROR_ALREADY_EXISTS. */
+HRESULT NPT_API
+DXGIDeclareAdapterRemovalSupport(void)
+{
+   static _Atomic int declared;
+   if (atomic_exchange(&declared, 1))
+      return (HRESULT)0x887A0036L; /* DXGI_ERROR_ALREADY_EXISTS */
+   return NPT_S_OK;
+}
