@@ -2851,9 +2851,11 @@ npt_id3d12device9_default_CreateCommandQueue1(void *self, const D3D12_COMMAND_QU
          * surfaces at first use, but returning the right HRESULT here
          * lets well-behaved callers short-circuit without an allocation. */
         if (NPT_SUCCEEDED((HRESULT)_ret) && _raw_ppCommandQueue)
+            /* Hand edit: the generator took CreatorID, the method's
+             * first REFIID, for the interface to wrap. */
             *_orig_ppCommandQueue = (void *)npt_com_get_or_wrap(
                 npt_com_self_device(self),
-                CreatorID,
+                riid,
                 (uint64_t)(uintptr_t)_raw_ppCommandQueue,
                 (struct npt_com_base *)self);
         else

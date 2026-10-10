@@ -10381,8 +10381,10 @@ npt_dispatch_ID3D12Device9_CreateCommandQueue1(struct npt_dispatch_context *ctx,
      * expression (if any) lets the generator resolve void** outputs
      * whose type is determined by the caller's riid. */
     if (args.ppCommandQueue && *args.ppCommandQueue)
+        /* Hand edit: the generator took CreatorID, the method's first
+         * REFIID, for the interface the queue is registered as. */
         npt_cs_handle_register_guest_id(ctx, args._guest_id_ppCommandQueue, *args.ppCommandQueue,
-            npt_object_type_from_iid(args.CreatorID));
+            npt_object_type_from_iid(args.riid));
 
     if (cmd_flags & NPT_CMD_FLAG_REPLY) {
         if (!npt_cs_decoder_get_fatal(ctx->decoder)) {
