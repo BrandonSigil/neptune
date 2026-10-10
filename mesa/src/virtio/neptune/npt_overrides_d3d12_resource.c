@@ -732,4 +732,8 @@ npt_overrides_d3d12_resource_init(void)
    npt_com_register_family(resource12_tiers,
                            sizeof(struct npt_d3d12_resource_aux),
                            npt_d3d12_resource_aux_init);
+   static const struct npt_com_chain resource12_chain = {
+      resource12_tiers, 2,
+   };
+   npt_com_register_chain(&resource12_chain);
 }

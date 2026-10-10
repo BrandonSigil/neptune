@@ -514,4 +514,6 @@ npt_overrides_d3d12_fence_init(void)
    npt_com_register_family(fence12_tiers,
                            sizeof(struct npt_d3d12_fence_aux),
                            npt_d3d12_fence_aux_init);
+   static const struct npt_com_chain fence12_chain = { fence12_tiers, 1 };
+   npt_com_register_chain(&fence12_chain);
 }

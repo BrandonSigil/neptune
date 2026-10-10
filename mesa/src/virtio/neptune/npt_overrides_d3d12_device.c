@@ -39,6 +39,9 @@
  *  - EnqueueMakeResident: resident at once (MakeResident), then the fence
  *    is signalled from the CPU.  SetBackgroundProcessingMode has no
  *    background work to wait for: the event is set at once.
+ *  - The device and pipeline library version chains
+ *    (npt_com_register_chain), up to ID3D12Device14 and
+ *    ID3D12PipelineLibrary1.
  */
 
 #include "npt_com.h"
@@ -851,6 +854,19 @@ dev12_SetBackgroundProcessingMode_override(
    return NPT_S_OK;
 }
 
+static const GUID *const device12_tiers[] = {
+   &NPT_IID_ID3D12Device,   &NPT_IID_ID3D12Device1,  &NPT_IID_ID3D12Device2,
+   &NPT_IID_ID3D12Device3,  &NPT_IID_ID3D12Device4,  &NPT_IID_ID3D12Device5,
+   &NPT_IID_ID3D12Device6,  &NPT_IID_ID3D12Device7,  &NPT_IID_ID3D12Device8,
+   &NPT_IID_ID3D12Device9,  &NPT_IID_ID3D12Device10, &NPT_IID_ID3D12Device11,
+   &NPT_IID_ID3D12Device12, &NPT_IID_ID3D12Device13, &NPT_IID_ID3D12Device14,
+   NULL,
+};
+
+static const GUID *const pipelinelibrary12_tiers[] = {
+   &NPT_IID_ID3D12PipelineLibrary, &NPT_IID_ID3D12PipelineLibrary1, NULL,
+};
+
 void
 npt_overrides_d3d12_device_init(void)
 {
@@ -920,4 +936,10 @@ npt_overrides_d3d12_device_init(void)
       SetBackgroundProcessingMode,
       dev12_SetBackgroundProcessingMode_override);
 
+   static const struct npt_com_chain device12_chain = { device12_tiers, 14 };
+   npt_com_register_chain(&device12_chain);
+   static const struct npt_com_chain pipelinelibrary12_chain = {
+      pipelinelibrary12_tiers, 1,
+   };
+   npt_com_register_chain(&pipelinelibrary12_chain);
 }

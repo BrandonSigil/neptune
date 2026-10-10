@@ -58,6 +58,10 @@ struct npt_com_ctor_entry {
    npt_com_ctor_fn ctor;
    size_t aux_size;
    npt_com_aux_init_fn aux_init;
+   /* Set by npt_com_register_chain: the chain `iid` belongs to and its
+    * index there. */
+   const struct npt_com_chain *chain;
+   uint32_t tier;
 };
 
 static struct npt_com_ctor_entry g_ctor_table[NPT_COM_CTOR_TABLE_BUCKETS];
@@ -199,6 +203,84 @@ npt_com_register_family(const GUID *const *tier_iids,
       e->aux_size = aux_size;
       e->aux_init = aux_init;
    }
+}
+
+void
+npt_com_register_chain(const struct npt_com_chain *chain)
+{
+   if (!chain || !chain->tiers)
+      return;
+   for (uint32_t i = 0; chain->tiers[i]; i++) {
+      struct npt_com_ctor_entry *e =
+         npt_com_table_lookup_entry_mut(chain->tiers[i]);
+      if (!e || e->iid == NULL) {
+         npt_log("npt_com_register_chain: no ctor entry for a version "
+                 "(register_chain must run after default-ctor populator)");
+         continue;
+      }
+      e->chain = chain;
+      e->tier = i;
+   }
+}
+
+int
+npt_com_chain_tier(const struct npt_com_chain *chain, const GUID *iid)
+{
+   if (!chain || !iid)
+      return -1;
+   for (uint32_t i = 0; chain->tiers[i]; i++) {
+      if (npt_com_iid_equal(chain->tiers[i], iid))
+         return (int)i;
+   }
+   return -1;
+}
+
+/* The highest version of `chain` between `tier`, the one the wrapper is
+ * made for, and chain->top that the host object `host_id` implements.
+ * One round trip when the host answers COM_QUERY_VERSION; an older host
+ * gets one QueryInterface per version, highest first, and a hit
+ * registers an id that is released right away.  Any failure keeps
+ * `tier`: the object was created or queried for it, so it has it. */
+static uint32_t
+npt_com_chain_resolve(struct npt_device *dev,
+                      const struct npt_com_chain *chain, uint32_t tier,
+                      uint64_t host_id)
+{
+   if (tier >= chain->top)
+      return chain->top;
+   if (npt_com_id_is_guest_fab(host_id))
+      return tier;
+   /* The thread's own ring: when multi-ring is off it is the primary
+    * ring an async create rode, so the object is registered by the time
+    * this is decoded; with multi-ring every create is synchronous. */
+   struct npt_ring *ring = npt_tls_get_ring(dev);
+   if (!ring)
+      return tier;
+
+   if (dev->renderer &&
+       (dev->renderer->info.caps_flags & NPT_CAPSET_CAP_COM_QUERY_VERSION)) {
+      const GUID *iids[NPT_COM_QUERY_VERSION_MAX_IIDS];
+      uint32_t n = 0;
+      for (uint32_t t = chain->top; t > tier &&
+                                    n < NPT_COM_QUERY_VERSION_MAX_IIDS; t--)
+         iids[n++] = chain->tiers[t];
+      const uint32_t index =
+         npt_dispatch_com_query_version(ring, host_id, iids, n);
+      return index < n ? chain->top - index : tier;
+   }
+
+   for (uint32_t t = chain->top; t > tier; t--) {
+      const uint64_t probe_id = npt_com_allocate_next_id();
+      const HRESULT hr = npt_dispatch_com_query_interface(
+         ring, host_id, chain->tiers[t], probe_id);
+      if (hr == NPT_S_OK) {
+         npt_com_send_release(dev, probe_id);
+         return t;
+      }
+      if (hr != NPT_E_NOINTERFACE)
+         break;
+   }
+   return tier;
 }
 
 uint32_t NPT_STDMETHODCALLTYPE
@@ -495,6 +577,7 @@ npt_com_get_or_wrap(struct npt_device *dev, const GUID *iid,
     *    insert_if_absent flags retry_needed; we yield and re-lookup
     *    so the dying wrapper's cache_remove + COM_RELEASE stay paired.
     */
+   const struct npt_com_ctor_entry *chain_entry = NULL;
    for (uint32_t tries = 0; tries < 8; tries++) {
       void *cached = npt_device_wrapper_cache_lookup(dev, host_id);
       if (cached)
@@ -506,12 +589,25 @@ npt_com_get_or_wrap(struct npt_device *dev, const GUID *iid,
          npt_log("npt_com_get_or_wrap: no ctor registered for IID");
          return NULL;
       }
+      if (entry->chain) {
+         /* A version chain: the vtable of the highest version the host
+          * object has, whatever version was asked for. */
+         if (!chain_entry) {
+            const uint32_t top = npt_com_chain_resolve(
+               dev, entry->chain, entry->tier, host_id);
+            chain_entry =
+               npt_com_table_lookup_entry_mut(entry->chain->tiers[top]);
+         }
+         if (chain_entry && chain_entry->ctor)
+            entry = chain_entry;
+      }
 
       void *wrapper = entry->ctor(dev, host_id);
       if (!wrapper)
          return NULL;
 
       struct npt_com_base *com = wrapper;
+      com->chain = entry->chain;
 
       /* Set parent BEFORE aux_init so per-family inits can detect a
        * tier alias (parent in the same family) and share the parent's
@@ -648,6 +744,18 @@ npt_com_query_interface_host(void *self, const GUID *riid, void **ppvObject)
    if (!riid || !self)
       return NPT_E_POINTER;
 
+   /* An interface no ctor wraps cannot be handed out, whatever the host
+    * answers. */
+   const struct npt_com_ctor_entry *entry =
+      npt_com_table_lookup_entry_mut(riid);
+   if (!entry || entry->iid == NULL || !entry->ctor)
+      return NPT_E_NOINTERFACE;
+   /* A version of this wrapper's own chain reaches here only when it is
+    * above the wrapper's vtable (the generated parent chain answers the
+    * rest): its host object lacks it, or Neptune does. */
+   if (entry->chain && entry->chain == com->chain)
+      return NPT_E_NOINTERFACE;
+
    mtx_lock(&g_qi_memo_mutex);
    struct npt_com_qi_memo_entry *e = npt_com_qi_memo_find_locked(com, riid);
    if (e) {
@@ -664,23 +772,22 @@ npt_com_query_interface_host(void *self, const GUID *riid, void **ppvObject)
    mtx_unlock(&g_qi_memo_mutex);
 
    /* One host round trip per (object, IID).  The guest id is
-    * pre-allocated and the wrapper built speculatively; on
-    * E_NOINTERFACE the id was never registered host-side and the
-    * wrapper's COM_RELEASE is a no-op there.  parent=self so the
-    * wrapper inherits the instance ring and shares family aux with
-    * the object it aliases. */
+    * pre-allocated; the wrapper is made once the host has registered it,
+    * so a chain wrapper can ask that object for its versions.  parent=self
+    * so the wrapper shares family aux with the object it aliases. */
    struct npt_device *dev = npt_com_self_device(self);
    uint64_t guest_id = npt_com_allocate_next_id();
-   struct npt_com_base *wrapper =
-      npt_com_get_or_wrap(dev, riid, guest_id, com);
-   if (!wrapper)
-      return NPT_E_OUTOFMEMORY;
    HRESULT hr = npt_com_send_query_interface(dev, npt_com_self_id(self),
                                              riid, guest_id);
    if (hr != NPT_S_OK && hr != NPT_E_NOINTERFACE) {
       /* Transport failure: nothing was learned about the IID. */
-      npt_com_vtbl_release(wrapper);
       return hr;
+   }
+   struct npt_com_base *wrapper = NULL;
+   if (hr == NPT_S_OK) {
+      wrapper = npt_com_get_or_wrap_or_release(dev, riid, guest_id, com);
+      if (!wrapper)
+         return NPT_E_OUTOFMEMORY;
    }
 
    struct npt_com_qi_memo_entry *fresh = malloc(sizeof(*fresh));
@@ -698,27 +805,21 @@ npt_com_query_interface_host(void *self, const GUID *riid, void **ppvObject)
       discard = true;
    } else if (fresh) {
       fresh->iid = *riid;
-      if (hr == NPT_S_OK) {
-         fresh->wrapper = wrapper;
+      fresh->wrapper = wrapper; /* NULL: the host answered E_NOINTERFACE */
+      if (wrapper) {
          npt_com_vtbl_addref(wrapper); /* the memo's hold */
          keep = wrapper;
-      } else {
-         fresh->wrapper = NULL;
-         discard = true;
       }
       fresh->next = com->qi_memo;
       com->qi_memo = fresh;
       fresh = NULL;
    } else {
       /* Entry allocation failed: answer unmemoized. */
-      if (hr == NPT_S_OK)
-         keep = wrapper;
-      else
-         discard = true;
+      keep = wrapper;
    }
    mtx_unlock(&g_qi_memo_mutex);
    free(fresh);
-   if (discard)
+   if (discard && wrapper)
       npt_com_vtbl_release(wrapper);
    if (!keep)
       return NPT_E_NOINTERFACE;

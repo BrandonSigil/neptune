@@ -268,7 +268,7 @@ out_GetParent_override(void *self, REFIID riid, void **ppParent)
    if (!aux || !aux->parent_adapter_host_id)
       return NPT_E_FAIL;
    struct npt_device *dev = npt_com_self_device(self);
-   void *parent = npt_com_get_or_wrap(dev, &NPT_IID_IDXGIAdapter4,
+   void *parent = npt_com_get_or_wrap(dev, &NPT_IID_IDXGIAdapter,
                                       aux->parent_adapter_host_id, NULL);
    if (!parent)
       return NPT_E_FAIL;

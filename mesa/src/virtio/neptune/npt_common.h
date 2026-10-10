@@ -156,6 +156,10 @@ struct npt_capset {
 /* Host D3D12 backend consumes DXIL containers (SM 6.x) directly.
  * Set for D3DMetal, clear for DXMT (DXBC-only shader front end). */
 #define NPT_CAPSET_CAP_DXIL                      (1u << 6)
+/* The host answers NPT_TRANSPORT_COM_QUERY_VERSION (npt_transport_defs.h).
+ * Clear on older hosts: the guest then asks with one QueryInterface per
+ * version. */
+#define NPT_CAPSET_CAP_COM_QUERY_VERSION         (1u << 7)
 
 #ifdef __WINE__
 void npt_log_impl(const char *fmt, ...);

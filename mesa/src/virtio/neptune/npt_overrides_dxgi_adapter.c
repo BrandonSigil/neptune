@@ -2,10 +2,10 @@
  * Copyright 2026 Turing Software LLC
  * SPDX-License-Identifier: MIT
  *
- * IDXGIAdapter{,1..4} overrides.  Each tier's wrapper carries its own
- * vtbl since QI goes through npt_com_get_or_wrap with the wider IID.
- * EnumOutputs is overridden to return guest-fabricated IDXGIOutput
- * wrappers, one per local DRM connector (or one synthetic fallback when
+ * IDXGIAdapter{,1..4} overrides.  An adapter is one chain wrapper
+ * (npt_com_register_chain) with the vtbl of the highest version the host
+ * adapter implements.  EnumOutputs is overridden to return
+ * guest-fabricated IDXGIOutput wrappers, one per local DRM connector (or one synthetic fallback when
  * no DRM is available).  All other adapter methods pass through to the
  * host -- the host DXGI is itself DXVK, which already supplies the
  * vendor-keyed UMD versions etc.
@@ -195,4 +195,6 @@ npt_overrides_dxgi_adapter_init(void)
    npt_com_register_family(adapter_tiers,
                            sizeof(struct npt_adapter_aux),
                            adp_aux_init);
+   static const struct npt_com_chain adapter_chain = { adapter_tiers, 4 };
+   npt_com_register_chain(&adapter_chain);
 }

@@ -2,8 +2,9 @@
  * Copyright 2026 Turing Software LLC
  * SPDX-License-Identifier: MIT
  *
- * IDXGIFactory{,1..7} overrides.  Each tier carries its own vtbl;
- * the methods below mirror the host D3D library's behaviour
+ * IDXGIFactory{,1..7} overrides.  A factory is one chain wrapper
+ * (npt_com_register_chain) with the vtbl of the highest version the host
+ * factory implements; the methods below mirror the host D3D library's behaviour
  * (S_OK / hWnd=NULL pass-through, UNSUPPORTED for software adapter,
  * NOTIMPL for stereo / occlusion / hardware-content-protection).
  */
@@ -324,4 +325,6 @@ npt_overrides_dxgi_factory_init(void)
                                        fac2_CreateSwapChainForComposition_override);
 
    npt_com_register_family(factory_tiers, 0, NULL);
+   static const struct npt_com_chain factory_chain = { factory_tiers, 7 };
+   npt_com_register_chain(&factory_chain);
 }

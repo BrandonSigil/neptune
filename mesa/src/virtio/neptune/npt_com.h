@@ -42,6 +42,7 @@
 #endif
 
 struct npt_com_qi_memo_entry;
+struct npt_com_chain;
 
 /*
  * Every Neptune COM wrapper starts with `lpVtbl` followed by struct
@@ -59,6 +60,9 @@ struct npt_com_base {
    /* Host QueryInterface verdicts learned for this wrapper, one wire
     * round trip per IID for the wrapper's lifetime (npt_com.c). */
    struct npt_com_qi_memo_entry *qi_memo;
+   /* The version chain this wrapper belongs to (npt_com_register_chain),
+    * or NULL. */
+   const struct npt_com_chain *chain;
 };
 
 /* npt_object_get_id (npt_cs.h) reads host_id through struct npt_com_head;
@@ -103,6 +107,7 @@ npt_com_base_init(struct npt_com_base *com, const void **vtbl,
    com->aux = NULL;
    com->aux_destroy = NULL;
    com->qi_memo = NULL;
+   com->chain = NULL;
 }
 
 static inline uint64_t
@@ -237,9 +242,45 @@ npt_com_register_family(const GUID *const *tier_iids,
                         size_t aux_size,
                         npt_com_aux_init_fn aux_init);
 
+/*
+ * Version chains.  Some families are one single-inheritance chain of
+ * versions: ID3D12Device .. ID3D12Device14, ID3D12GraphicsCommandList ..
+ * 10, IDXGIFactory .. 7, ...  On Windows one object answers every version
+ * through one vtable, and games call a later version's method through the
+ * pointer they got for an earlier one: ELDEN RING calls
+ * ID3D12GraphicsCommandList2::WriteBufferImmediate on a list it created
+ * as an ID3D12GraphicsCommandList.  A chain wrapper does the same.
+ * Whatever version it is created for, npt_com_get_or_wrap builds it with
+ * the vtable of the highest version its host object implements, asked
+ * once when the wrapper is made and capped at `top`.  Its QueryInterface
+ * then hands out the wrapper itself for every version up to that one,
+ * and E_NOINTERFACE above it.
+ *
+ * The host object decides, not the family: D3DMetal's bundles stop at
+ * ID3D12GraphicsCommandList6 where its other lists go to 10, and a heap
+ * it imports from guest memory has no ID3D12Heap1.
+ */
+struct npt_com_chain {
+   /* Lowest version first, NULL-terminated; each derives from the one
+    * before.  Every entry needs a registered ctor. */
+   const GUID *const *tiers;
+   /* Index in `tiers` of the highest version whose every method Neptune
+    * forwards, or answers itself with Windows semantics. */
+   uint32_t top;
+};
+
+/* Must run after the default-ctor populator, like
+ * npt_com_register_family. */
+void
+npt_com_register_chain(const struct npt_com_chain *chain);
+
+/* Index of `iid` in `chain`, or -1 when it is not one of its versions. */
+int
+npt_com_chain_tier(const struct npt_com_chain *chain, const GUID *iid);
+
 /* Resolve a wrapper's per-family aux, tolerating tier aliases.  A
- * QI-minted higher-tier wrapper (e.g. ID3D12Resource1 from an
- * ID3D12Resource) shares its primary's aux with aux_destroy cleared to
+ * QI-minted higher-tier wrapper (e.g. ID3D11Texture2D1 from an
+ * ID3D11Texture2D; chain wrappers have none) shares its primary's aux with aux_destroy cleared to
  * avoid a double free; a plain `aux_destroy == fn` test would reject
  * it.  Returns com->aux when self carries aux_destroy == fn, or when
  * self is such an alias whose same-family ancestor owns it; NULL

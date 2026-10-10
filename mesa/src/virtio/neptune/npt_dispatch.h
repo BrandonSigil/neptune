@@ -40,6 +40,14 @@ HRESULT npt_dispatch_com_query_interface(struct npt_ring *ring,
                                          const GUID *iid,
                                          uint64_t guest_id);
 
+/* NPT_TRANSPORT_COM_QUERY_VERSION: index of the first of `iids` (highest
+ * version first) the object implements, or NPT_COM_QUERY_VERSION_NONE.
+ * Only for a host advertising NPT_CAPSET_CAP_COM_QUERY_VERSION. */
+uint32_t npt_dispatch_com_query_version(struct npt_ring *ring,
+                                        uint64_t object_id,
+                                        const GUID *const *iids,
+                                        uint32_t count);
+
 /* ==========================================================================
  * RESOURCE
  * ========================================================================== */

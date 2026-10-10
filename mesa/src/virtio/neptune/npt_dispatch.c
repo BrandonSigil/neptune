@@ -59,6 +59,53 @@ npt_dispatch_com_query_interface(struct npt_ring *ring, uint64_t src_id,
    return hr;
 }
 
+uint32_t
+npt_dispatch_com_query_version(struct npt_ring *ring, uint64_t object_id,
+                               const GUID *const *iids, uint32_t count)
+{
+   if (!ring || !object_id || !iids || !count ||
+       count > NPT_COM_QUERY_VERSION_MAX_IIDS)
+      return NPT_COM_QUERY_VERSION_NONE;
+
+   struct npt_cmd_com_query_version cmd;
+   memset(&cmd, 0, sizeof(cmd));
+   cmd.header.cmd_type =
+      NPT_TRANSPORT_CMD_TYPE(NPT_TRANSPORT_SUBGROUP_COM,
+                             NPT_TRANSPORT_COM_QUERY_VERSION);
+   cmd.header.cmd_flags = NPT_CMD_FLAG_REPLY;
+   cmd.header.cmd_size = sizeof(cmd);
+   cmd.header.object_id = object_id;
+   cmd.count = count;
+   for (uint32_t i = 0; i < count; i++)
+      cmd.iids[i] = *iids[i];
+
+   struct npt_ring_submit_command submit;
+   memset(&submit, 0, sizeof(submit));
+   struct npt_cs_encoder *enc = npt_ring_submit_command_init(
+      ring, &submit, &cmd, sizeof(cmd),
+      sizeof(struct npt_cmd_com_query_version_reply));
+   if (enc)
+      enc->cur = (uint8_t *)&cmd + sizeof(cmd);
+   npt_ring_submit_command(ring, &submit);
+
+   struct npt_cs_decoder *dec = npt_ring_get_command_reply(ring, &submit);
+   uint32_t index = NPT_COM_QUERY_VERSION_NONE;
+   if (dec && dec->cur && dec->end &&
+       (size_t)(dec->end - dec->cur) >=
+          sizeof(struct npt_cmd_com_query_version_reply)) {
+      const struct npt_cmd_com_query_version_reply *reply =
+         (const struct npt_cmd_com_query_version_reply *)dec->cur;
+      /* A lost renderer answers DXGI_ERROR_DEVICE_REMOVED here, which is
+       * no index. */
+      if (reply->header.cmd_return < count)
+         index = reply->header.cmd_return;
+   }
+   if (dec)
+      npt_ring_free_command_reply(ring, &submit);
+
+   return index;
+}
+
 /* ==========================================================================
  * RESOURCE
  * ========================================================================== */

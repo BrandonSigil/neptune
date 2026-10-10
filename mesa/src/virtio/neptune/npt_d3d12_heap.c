@@ -337,4 +337,8 @@ npt_d3d12_heap_overrides_init(void)
    npt_com_register_family(heap12_tiers,
                            sizeof(struct npt_d3d12_heap_aux),
                            npt_d3d12_heap_aux_init);
+   /* A heap imported from guest memory (the shmem path above) has no
+    * ID3D12Heap1 on D3DMetal; the chain asks each heap. */
+   static const struct npt_com_chain heap12_chain = { heap12_tiers, 1 };
+   npt_com_register_chain(&heap12_chain);
 }

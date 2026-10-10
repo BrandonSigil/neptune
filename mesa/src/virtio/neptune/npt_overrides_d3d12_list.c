@@ -4,6 +4,14 @@
  *
  * ID3D12GraphicsCommandList{,1..10} and ID3D12CommandAllocator overrides.
  *
+ * A graphics command list is one chain wrapper (npt_com_register_chain):
+ * whatever version it is created for, it carries the vtbl of the highest
+ * version its host list implements, up to ID3D12GraphicsCommandList9.
+ * List10 is work graphs, which need state objects Neptune does not create
+ * (npt_overrides_d3d12_device.c).  A list asked for as one of its base
+ * interfaces (ID3D12CommandList, ...) is the same object on Windows, so
+ * it is created and wrapped as a graphics command list too.
+ *
  * Close is async.  The generated default is force_sync purely as a
  * cross-ring barrier: a list recorded on thread A's TLS ring may be
  * ExecuteCommandLists'd from thread B's ring, and the host must have
@@ -35,6 +43,7 @@
 
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "npt_com.h"
 #include "npt_device.h"
@@ -61,6 +70,20 @@
    NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist8, m, f); \
    NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist9, m, f); \
    NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist10, m, f)
+
+/* CreateCommandList1, from ID3D12Device4 up. */
+#define NPT_REGISTER_OVERRIDE_D3D12_DEVICE4_UP(m, f) \
+   NPT_REGISTER_OVERRIDE(id3d12device4, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device5, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device6, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device7, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device8, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device9, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device10, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device11, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device12, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device13, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12device14, m, f)
 
 /* CreateCommandList cascade over every device tier. */
 #define NPT_REGISTER_OVERRIDE_D3D12_DEVICE_ALL(m, f) \
@@ -380,6 +403,38 @@ npt_d3d12_list_stamp_execute(void *list_wrapper, uint64_t ring_id,
    return true;
 }
 
+static const struct npt_com_chain list12_chain = { list12_tiers, 9 };
+
+static bool
+list12_iid_equal(const IID *a, const IID *b)
+{
+   return memcmp(a, b, sizeof(*a)) == 0;
+}
+
+/* The interface a new list is created and wrapped as, or NULL for a
+ * version above the chain's top. */
+static const IID *
+list12_create_iid(D3D12_COMMAND_LIST_TYPE type, const IID *riid)
+{
+   if (!riid)
+      return riid;
+   const int tier = npt_com_chain_tier(&list12_chain, riid);
+   if (tier > (int)list12_chain.top)
+      return NULL;
+   if (tier >= 0)
+      return riid;
+   const bool graphics = type == D3D12_COMMAND_LIST_TYPE_DIRECT ||
+                         type == D3D12_COMMAND_LIST_TYPE_BUNDLE ||
+                         type == D3D12_COMMAND_LIST_TYPE_COMPUTE ||
+                         type == D3D12_COMMAND_LIST_TYPE_COPY;
+   if (graphics && (list12_iid_equal(riid, &NPT_IID_IUnknown) ||
+                    list12_iid_equal(riid, &NPT_IID_ID3D12Object) ||
+                    list12_iid_equal(riid, &NPT_IID_ID3D12DeviceChild) ||
+                    list12_iid_equal(riid, &NPT_IID_ID3D12CommandList)))
+      return &NPT_IID_ID3D12GraphicsCommandList;
+   return riid;
+}
+
 static HRESULT NPT_STDMETHODCALLTYPE
 dev12_CreateCommandList_override(void *self, UINT nodeMask,
                                  D3D12_COMMAND_LIST_TYPE type,
@@ -387,8 +442,14 @@ dev12_CreateCommandList_override(void *self, UINT nodeMask,
                                  ID3D12PipelineState *pInitialState,
                                  const IID *riid, void **ppCommandList)
 {
+   const IID *iid = list12_create_iid(type, riid);
+   if (!iid) {
+      if (ppCommandList)
+         *ppCommandList = NULL;
+      return NPT_E_NOINTERFACE;
+   }
    HRESULT hr = npt_id3d12device_default_CreateCommandList(
-      self, nodeMask, type, pCommandAllocator, pInitialState, riid,
+      self, nodeMask, type, pCommandAllocator, pInitialState, iid,
       ppCommandList);
    /* A list created this way starts recording without a Reset, so this is
     * the only place its first allocator is observable.  (CreateCommandList1
@@ -399,6 +460,22 @@ dev12_CreateCommandList_override(void *self, UINT nodeMask,
          laux->allocator = pCommandAllocator;
    }
    return hr;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_CreateCommandList1_override(void *self, UINT nodeMask,
+                                  D3D12_COMMAND_LIST_TYPE type,
+                                  D3D12_COMMAND_LIST_FLAGS flags,
+                                  const IID *riid, void **ppCommandList)
+{
+   const IID *iid = list12_create_iid(type, riid);
+   if (!iid) {
+      if (ppCommandList)
+         *ppCommandList = NULL;
+      return NPT_E_NOINTERFACE;
+   }
+   return npt_id3d12device4_default_CreateCommandList1(
+      self, nodeMask, type, flags, iid, ppCommandList);
 }
 
 static HRESULT NPT_STDMETHODCALLTYPE
@@ -478,9 +555,12 @@ npt_overrides_d3d12_list_init(void)
                          alloc12_Reset_override);
    NPT_REGISTER_OVERRIDE_D3D12_DEVICE_ALL(CreateCommandList,
                                           dev12_CreateCommandList_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE4_UP(CreateCommandList1,
+                                          dev12_CreateCommandList1_override);
    npt_com_register_family(list12_tiers,
                            sizeof(struct npt_d3d12_list_aux),
                            npt_d3d12_list_aux_init);
+   npt_com_register_chain(&list12_chain);
    npt_com_register_family(alloc12_tiers,
                            sizeof(struct npt_d3d12_alloc_aux),
                            npt_d3d12_alloc_aux_init);
