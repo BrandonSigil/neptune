@@ -25,6 +25,20 @@
  *    refuses it.
  *  - GetDeviceRemovedReason: DXGI_ERROR_DRIVER_INTERNAL_ERROR once the
  *    render server no longer serves the context (npt_renderer_is_lost).
+ *  - The methods that cannot cross the wire are answered here, as a
+ *    device without that feature answers them.  Raytracing and work
+ *    graphs need state objects, whose shader identifiers and export
+ *    associations the protocol does not carry, so CheckFeatureSupport
+ *    reports both tiers as not supported and CreateStateObject/
+ *    AddToStateObject fail; heaps over the app's own memory
+ *    (OpenExistingHeapFrom*) would hand the host a guest address or
+ *    HANDLE, so EXISTING_HEAPS is not supported and they fail; meta
+ *    commands, whose descriptions carry host string pointers, are
+ *    enumerated as none; a lifetime tracker would need the host to call
+ *    the app's ID3D12LifetimeOwner.
+ *  - EnqueueMakeResident: resident at once (MakeResident), then the fence
+ *    is signalled from the CPU.  SetBackgroundProcessingMode has no
+ *    background work to wait for: the event is set at once.
  */
 
 #include "npt_com.h"
@@ -35,6 +49,7 @@
 
 #include "neptune-protocol/npt_protocol_client_id3d12descriptorheap.h"
 #include "neptune-protocol/npt_protocol_client_id3d12device.h"
+#include "neptune-protocol/npt_protocol_client_id3d12fence.h"
 #include "neptune-protocol/npt_protocol_client_id3d12pipelinelibrary.h"
 #include "neptune-protocol/npt_protocol_guest_id3d12device.h"
 #include "neptune-protocol/npt_protocol_defs.h"
@@ -236,6 +251,30 @@ dev12_check_feature_levels(void *self,
    return hr;
 }
 
+/* What the host has but Neptune cannot carry (see the top of the file). */
+static void
+dev12_mask_features(D3D12_FEATURE Feature, void *data, UINT size)
+{
+   switch (Feature) {
+   case D3D12_FEATURE_D3D12_OPTIONS5:
+      if (size == sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS5))
+         ((D3D12_FEATURE_DATA_D3D12_OPTIONS5 *)data)->RaytracingTier =
+            D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
+      break;
+   case D3D12_FEATURE_D3D12_OPTIONS21:
+      if (size == sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS21))
+         ((D3D12_FEATURE_DATA_D3D12_OPTIONS21 *)data)->WorkGraphsTier =
+            D3D12_WORK_GRAPHS_TIER_NOT_SUPPORTED;
+      break;
+   case D3D12_FEATURE_EXISTING_HEAPS:
+      if (size == sizeof(D3D12_FEATURE_DATA_EXISTING_HEAPS))
+         ((D3D12_FEATURE_DATA_EXISTING_HEAPS *)data)->Supported = 0;
+      break;
+   default:
+      break;
+   }
+}
+
 static HRESULT NPT_STDMETHODCALLTYPE
 dev12_CheckFeatureSupport_override(void *self,
                                    D3D12_FEATURE Feature,
@@ -263,9 +302,13 @@ dev12_CheckFeatureSupport_override(void *self,
    default: {
       /* Pointer-free feature structs are a plain in/out byte blob. */
       struct npt_device *dev = npt_com_self_device(self);
-      return npt_call_ID3D12Device_CheckFeatureSupport(
+      HRESULT hr = npt_call_ID3D12Device_CheckFeatureSupport(
          npt_device_method_ring(dev), npt_com_self_id(self),
          Feature, pFeatureSupportData, FeatureSupportDataSize);
+      if (NPT_SUCCEEDED(hr))
+         dev12_mask_features(Feature, pFeatureSupportData,
+                             FeatureSupportDataSize);
+      return hr;
    }
    }
 }
@@ -666,6 +709,148 @@ dev12_GetDeviceRemovedReason_override(void *self)
    return npt_id3d12device_default_GetDeviceRemovedReason(self);
 }
 
+/* ------------------------------------------------------------------ */
+/* methods answered here (see the top of the file)                     */
+/* ------------------------------------------------------------------ */
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_OpenExistingHeapFromAddress_override(void *self, const void *pAddress,
+                                           const IID *riid, void **ppvHeap)
+{
+   (void)self; (void)pAddress; (void)riid;
+   if (ppvHeap)
+      *ppvHeap = NULL;
+   return NPT_E_NOTIMPL;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_OpenExistingHeapFromAddress1_override(void *self, const void *pAddress,
+                                            SIZE_T size, const IID *riid,
+                                            void **ppvHeap)
+{
+   (void)size;
+   return dev12_OpenExistingHeapFromAddress_override(self, pAddress, riid,
+                                                     ppvHeap);
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_OpenExistingHeapFromFileMapping_override(void *self,
+                                               HANDLE hFileMapping,
+                                               const IID *riid, void **ppvHeap)
+{
+   (void)self; (void)hFileMapping; (void)riid;
+   if (ppvHeap)
+      *ppvHeap = NULL;
+   return NPT_E_NOTIMPL;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_EnqueueMakeResident_override(void *self, D3D12_RESIDENCY_FLAGS Flags,
+                                   UINT NumObjects, ID3D12Pageable **ppObjects,
+                                   ID3D12Fence *pFenceToSignal,
+                                   UINT64 FenceValueToSignal)
+{
+   (void)Flags;
+   if (!pFenceToSignal)
+      return NPT_E_INVALIDARG;
+   HRESULT hr = NPT_S_OK;
+   if (NumObjects)
+      hr = npt_id3d12device_default_MakeResident(self, NumObjects,
+                                                 ppObjects);
+   if (NPT_FAILED(hr))
+      return hr;
+   const struct npt_id3d12fence_client_vtbl *fv =
+      (const void *)((struct npt_com_base *)pFenceToSignal)->lpVtbl;
+   return fv->Signal(pFenceToSignal, FenceValueToSignal);
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_CreateLifetimeTracker_override(void *self, ID3D12LifetimeOwner *pOwner,
+                                     const IID *riid, void **ppvTracker)
+{
+   (void)self; (void)pOwner; (void)riid;
+   if (ppvTracker)
+      *ppvTracker = NULL;
+   return NPT_E_NOTIMPL;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_EnumerateMetaCommands_override(void *self, UINT *pNumMetaCommands,
+                                     D3D12_META_COMMAND_DESC *pDescs)
+{
+   (void)self; (void)pDescs;
+   if (!pNumMetaCommands)
+      return NPT_E_INVALIDARG;
+   *pNumMetaCommands = 0;
+   return NPT_S_OK;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_EnumerateMetaCommandParameters_override(
+   void *self, const GUID *CommandId, D3D12_META_COMMAND_PARAMETER_STAGE Stage,
+   UINT *pTotalStructureSizeInBytes, UINT *pParameterCount,
+   D3D12_META_COMMAND_PARAMETER_DESC *pParameterDescs)
+{
+   (void)self; (void)CommandId; (void)Stage; (void)pParameterDescs;
+   if (pTotalStructureSizeInBytes)
+      *pTotalStructureSizeInBytes = 0;
+   if (pParameterCount)
+      *pParameterCount = 0;
+   return NPT_E_INVALIDARG;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_CreateMetaCommand_override(void *self, const GUID *CommandId,
+                                 UINT NodeMask,
+                                 const void *pCreationParametersData,
+                                 SIZE_T CreationParametersDataSizeInBytes,
+                                 const IID *riid, void **ppMetaCommand)
+{
+   (void)self; (void)CommandId; (void)NodeMask;
+   (void)pCreationParametersData; (void)CreationParametersDataSizeInBytes;
+   (void)riid;
+   if (ppMetaCommand)
+      *ppMetaCommand = NULL;
+   return NPT_E_INVALIDARG;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_CreateStateObject_override(void *self,
+                                 const D3D12_STATE_OBJECT_DESC *pDesc,
+                                 const IID *riid, void **ppStateObject)
+{
+   (void)self; (void)pDesc; (void)riid;
+   if (ppStateObject)
+      *ppStateObject = NULL;
+   return NPT_E_NOTIMPL;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_AddToStateObject_override(void *self,
+                                const D3D12_STATE_OBJECT_DESC *pAddition,
+                                ID3D12StateObject *pStateObjectToGrowFrom,
+                                const IID *riid, void **ppNewStateObject)
+{
+   (void)self; (void)pAddition; (void)pStateObjectToGrowFrom; (void)riid;
+   if (ppNewStateObject)
+      *ppNewStateObject = NULL;
+   return NPT_E_NOTIMPL;
+}
+
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_SetBackgroundProcessingMode_override(
+   void *self, D3D12_BACKGROUND_PROCESSING_MODE Mode,
+   D3D12_MEASUREMENTS_ACTION MeasurementsAction,
+   HANDLE hEventToSignalUponCompletion, BOOL *pbFurtherMeasurementsDesired)
+{
+   (void)self; (void)Mode; (void)MeasurementsAction;
+   if (pbFurtherMeasurementsDesired)
+      *pbFurtherMeasurementsDesired = 0;
+   if (hEventToSignalUponCompletion)
+      SetEvent(hEventToSignalUponCompletion);
+   return NPT_S_OK;
+}
+
 void
 npt_overrides_d3d12_device_init(void)
 {
@@ -707,4 +892,32 @@ npt_overrides_d3d12_device_init(void)
    npt_com_register_family(descriptorheap12_tiers,
                            sizeof(struct npt_d3d12_descriptorheap_aux),
                            npt_d3d12_descriptorheap_aux_init);
+
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE3(
+      OpenExistingHeapFromAddress, dev12_OpenExistingHeapFromAddress_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE3(
+      OpenExistingHeapFromFileMapping,
+      dev12_OpenExistingHeapFromFileMapping_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE13(
+      OpenExistingHeapFromAddress1,
+      dev12_OpenExistingHeapFromAddress1_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE3(EnqueueMakeResident,
+                                       dev12_EnqueueMakeResident_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE5(CreateLifetimeTracker,
+                                       dev12_CreateLifetimeTracker_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE5(EnumerateMetaCommands,
+                                       dev12_EnumerateMetaCommands_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE5(
+      EnumerateMetaCommandParameters,
+      dev12_EnumerateMetaCommandParameters_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE5(CreateMetaCommand,
+                                       dev12_CreateMetaCommand_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE5(CreateStateObject,
+                                       dev12_CreateStateObject_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE7(AddToStateObject,
+                                       dev12_AddToStateObject_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE6(
+      SetBackgroundProcessingMode,
+      dev12_SetBackgroundProcessingMode_override);
+
 }
