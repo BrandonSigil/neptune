@@ -39,6 +39,7 @@
  *  - EnqueueMakeResident: resident at once (MakeResident), then the fence
  *    is signalled from the CPU.  SetBackgroundProcessingMode has no
  *    background work to wait for: the event is set at once.
+ *  - CreateCommandQueue1 pins its queue like CreateCommandQueue.
  *  - The device and pipeline library version chains
  *    (npt_com_register_chain), up to ID3D12Device14 and
  *    ID3D12PipelineLibrary1.
@@ -712,6 +713,20 @@ dev12_GetDeviceRemovedReason_override(void *self)
    return npt_id3d12device_default_GetDeviceRemovedReason(self);
 }
 
+static HRESULT NPT_STDMETHODCALLTYPE
+dev12_CreateCommandQueue1_override(void *self,
+                                   const D3D12_COMMAND_QUEUE_DESC *pDesc,
+                                   const IID *CreatorID, const IID *riid,
+                                   void **ppCommandQueue)
+{
+   HRESULT hr = npt_id3d12device9_default_CreateCommandQueue1(
+      self, pDesc, CreatorID, riid, ppCommandQueue);
+   if (NPT_SUCCEEDED(hr) && pDesc && ppCommandQueue && *ppCommandQueue)
+      npt_com_pin_queue_ring(*ppCommandQueue,
+                             pDesc->Type == D3D12_COMMAND_LIST_TYPE_DIRECT);
+   return hr;
+}
+
 /* ------------------------------------------------------------------ */
 /* methods answered here (see the top of the file)                     */
 /* ------------------------------------------------------------------ */
@@ -935,6 +950,8 @@ npt_overrides_d3d12_device_init(void)
    NPT_REGISTER_OVERRIDE_D3D12_DEVICE6(
       SetBackgroundProcessingMode,
       dev12_SetBackgroundProcessingMode_override);
+   NPT_REGISTER_OVERRIDE_D3D12_DEVICE9(CreateCommandQueue1,
+                                       dev12_CreateCommandQueue1_override);
 
    static const struct npt_com_chain device12_chain = { device12_tiers, 14 };
    npt_com_register_chain(&device12_chain);
