@@ -12,6 +12,12 @@
  * interfaces (ID3D12CommandList, ...) is the same object on Windows, so
  * it is created and wrapped as a graphics command list too.
  *
+ * AtomicCopyBufferUINT and AtomicCopyBufferUINT64 are a copy of the 4 or
+ * 8 aligned bytes: D3DMetal logs "Function not implemented" and drops
+ * them, and an aligned copy is a single write on the GPU.  The dependent
+ * resources need nothing more: the copy is ordered after their writes by
+ * the list's own barriers, as for any copy.
+ *
  * Close is async.  The generated default is force_sync purely as a
  * cross-ring barrier: a list recorded on thread A's TLS ring may be
  * ExecuteCommandLists'd from thread B's ring, and the host must have
@@ -60,6 +66,19 @@
 
 #define NPT_REGISTER_OVERRIDE_D3D12_LIST_ALL(m, f) \
    NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist1, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist2, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist3, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist4, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist5, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist6, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist7, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist8, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist9, m, f); \
+   NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist10, m, f)
+
+/* Every list tier that has the ID3D12GraphicsCommandList1 methods. */
+#define NPT_REGISTER_OVERRIDE_D3D12_LIST1_UP(m, f) \
    NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist1, m, f); \
    NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist2, m, f); \
    NPT_REGISTER_OVERRIDE(id3d12graphicscommandlist3, m, f); \
@@ -516,6 +535,32 @@ list12_ExecuteBundle_override(void *self, ID3D12GraphicsCommandList *pBundle)
    npt_id3d12graphicscommandlist_default_ExecuteBundle(self, pBundle);
 }
 
+static void NPT_STDMETHODCALLTYPE
+list12_AtomicCopyBufferUINT_override(
+   void *self, ID3D12Resource *pDstBuffer, UINT64 DstOffset,
+   ID3D12Resource *pSrcBuffer, UINT64 SrcOffset, UINT Dependencies,
+   ID3D12Resource **ppDependentResources,
+   const D3D12_SUBRESOURCE_RANGE_UINT64 *pDependentSubresourceRanges)
+{
+   (void)Dependencies; (void)ppDependentResources;
+   (void)pDependentSubresourceRanges;
+   npt_id3d12graphicscommandlist_default_CopyBufferRegion(
+      self, pDstBuffer, DstOffset, pSrcBuffer, SrcOffset, 4);
+}
+
+static void NPT_STDMETHODCALLTYPE
+list12_AtomicCopyBufferUINT64_override(
+   void *self, ID3D12Resource *pDstBuffer, UINT64 DstOffset,
+   ID3D12Resource *pSrcBuffer, UINT64 SrcOffset, UINT Dependencies,
+   ID3D12Resource **ppDependentResources,
+   const D3D12_SUBRESOURCE_RANGE_UINT64 *pDependentSubresourceRanges)
+{
+   (void)Dependencies; (void)ppDependentResources;
+   (void)pDependentSubresourceRanges;
+   npt_id3d12graphicscommandlist_default_CopyBufferRegion(
+      self, pDstBuffer, DstOffset, pSrcBuffer, SrcOffset, 8);
+}
+
 static HRESULT NPT_STDMETHODCALLTYPE
 list12_Close_override(void *self)
 {
@@ -551,6 +596,10 @@ npt_overrides_d3d12_list_init(void)
    NPT_REGISTER_OVERRIDE_D3D12_LIST_ALL(Reset, list12_Reset_override);
    NPT_REGISTER_OVERRIDE_D3D12_LIST_ALL(ExecuteBundle,
                                         list12_ExecuteBundle_override);
+   NPT_REGISTER_OVERRIDE_D3D12_LIST1_UP(AtomicCopyBufferUINT,
+                                        list12_AtomicCopyBufferUINT_override);
+   NPT_REGISTER_OVERRIDE_D3D12_LIST1_UP(
+      AtomicCopyBufferUINT64, list12_AtomicCopyBufferUINT64_override);
    NPT_REGISTER_OVERRIDE(id3d12commandallocator, Reset,
                          alloc12_Reset_override);
    NPT_REGISTER_OVERRIDE_D3D12_DEVICE_ALL(CreateCommandList,
