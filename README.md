@@ -43,7 +43,7 @@ scripts/build-server.sh                                    # build/prefix/{bin,l
 
 ## License
 
-Both trees are MIT licensed (Neptune: Copyright Turing Software LLC; mesa and virglrenderer: their authors, see `mesa/docs/license.rst` and `virglrenderer/COPYING`). Our changes are proprietary while this repository is private.
+Neptune, Mesa and virglrenderer are MIT licensed (Neptune: Copyright Turing Software LLC; Mesa and virglrenderer: their authors, see `mesa/docs/license.rst` and `virglrenderer/COPYING`), and their code keeps that license. Our changes are licensed under the GNU General Public License v3.0 (see `LICENSE`).
 
 ## Related repositories
 
