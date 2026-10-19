@@ -2,8 +2,6 @@
 
 **Direct3D for Voile's Linux engine.** Neptune is UTM's Direct3D 11, DXGI and Direct3D 12 driver for Windows guests, which replays every call on the host. This fork adapts it to run in Wine for Linux on macOS, under [voile-lkd](https://github.com/Zagrios/voile-lkd).
 
-This repository is private.
-
 ## How it works
 
 ```text
