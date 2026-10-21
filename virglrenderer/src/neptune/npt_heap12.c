@@ -64,7 +64,8 @@ npt_heap12_unpin(struct npt_context *ctx, struct npt_resource *res)
    mtx_lock(&ctx->resource_mutex);
    assert(res->heap_import_count > 0);
    res->heap_import_count--;
-   const bool free_now = res->zombie && res->heap_import_count == 0;
+   const bool free_now = res->zombie && res->heap_import_count == 0 &&
+                         res->command_pin_count == 0;
    const uint32_t res_id = res->res_id;
    mtx_unlock(&ctx->resource_mutex);
 

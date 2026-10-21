@@ -66,8 +66,14 @@ struct npt_resource {
    /* Live ID3D12Heap imports aliasing u.data, plus any import in
     * progress.  While nonzero the mapping must NOT be munmapped: destroy
     * marks the entry `zombie` instead and the last import released
-    * completes the free.  Both fields are guarded by resource_mutex. */
+    * completes the free.  All three fields are guarded by resource_mutex. */
    uint32_t heap_import_count;
+   /* Commands reading or writing u.data on a ring thread, between
+    * npt_context_pin_resource and npt_context_unpin_resource.  The guest
+    * destroys a resource over the virtqueue, which does not wait for the
+    * ring commands that still name it: destroy defers the munmap while
+    * this is nonzero, as it does for heap imports. */
+   uint32_t command_pin_count;
    bool zombie;
 };
 
@@ -276,6 +282,19 @@ npt_context_get_resource(struct npt_context *ctx, uint32_t res_id)
 
    return likely(entry) ? entry->data : NULL;
 }
+
+/* Look up res_id and pin it in one resource_mutex section, for a command
+ * that uses its mapping after the lookup: npt_context_get_resource drops
+ * the lock before returning, so a destroy on the context thread could
+ * munmap the pages under the command.  Balanced by
+ * npt_context_unpin_resource; NULL when there is no such resource. */
+struct npt_resource *
+npt_context_pin_resource(struct npt_context *ctx, uint32_t res_id);
+
+/* Drop a command pin, completing the free of a resource destroyed while
+ * pinned. */
+void
+npt_context_unpin_resource(struct npt_context *ctx, struct npt_resource *res);
 
 /* Takes ownership of the fd. */
 bool

@@ -94,6 +94,34 @@ npt_context_free_detached_resource(struct npt_resource *res)
    npt_resource_free(res);
 }
 
+struct npt_resource *
+npt_context_pin_resource(struct npt_context *ctx, uint32_t res_id)
+{
+   mtx_lock(&ctx->resource_mutex);
+   const struct hash_entry *entry =
+      _mesa_hash_table_search(ctx->resource_table, &res_id);
+   struct npt_resource *res = entry ? entry->data : NULL;
+   if (res)
+      res->command_pin_count++;
+   mtx_unlock(&ctx->resource_mutex);
+
+   return res;
+}
+
+void
+npt_context_unpin_resource(struct npt_context *ctx, struct npt_resource *res)
+{
+   mtx_lock(&ctx->resource_mutex);
+   assert(res->command_pin_count > 0);
+   res->command_pin_count--;
+   const bool free_now = res->zombie && !res->command_pin_count &&
+                         !res->heap_import_count;
+   mtx_unlock(&ctx->resource_mutex);
+
+   if (free_now)
+      npt_resource_free(res);
+}
+
 /* Overrides are set only where the default dispatcher cannot cope:
  * top-level functions (no _self for dlsym to bind against),
  * shared-HANDLE rejection, and feedback lifecycle hooks.  All other
@@ -1319,11 +1347,14 @@ npt_context_destroy_resource(struct npt_context *ctx, uint32_t res_id)
    }
 
    /* A live ID3D12Heap import still aliases this mapping, so munmapping
-    * it now is undefined under the host graphics driver.  Park the
-    * detached entry as a zombie for the last import to free. */
+    * it now is undefined under the host graphics driver; a ring command
+    * may still be copying through it (an UNMAP the guest queued just
+    * before releasing the texture, then the shmem).  Park the detached
+    * entry as a zombie for the last import or command to free. */
    mtx_lock(&ctx->resource_mutex);
    const uint32_t imports = res->heap_import_count;
-   if (imports > 0)
+   const uint32_t commands = res->command_pin_count;
+   if (imports > 0 || commands > 0)
       res->zombie = true;
    mtx_unlock(&ctx->resource_mutex);
 
@@ -1331,6 +1362,12 @@ npt_context_destroy_resource(struct npt_context *ctx, uint32_t res_id)
       npt_log("destroy_resource: res %u still imported by %u D3D12 heap(s); "
               "DEFERRING munmap until heap release (zombie)",
               res_id, imports);
+      return;
+   }
+   if (commands > 0) {
+      npt_log("destroy_resource: res %u still used by %u ring command(s); "
+              "DEFERRING munmap until they finish (zombie)",
+              res_id, commands);
       return;
    }
 

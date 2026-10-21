@@ -235,10 +235,13 @@ npt_shared_export_blob(struct npt_context *ctx, uint64_t texture_id,
       npt_shared_dxgi_to_virgl_format(NPT_SHARED_EXPORT_FORMAT(desc));
 
    /* Publish the export-level facts into the exporter's shmem window. */
-   struct npt_resource *data_res = npt_context_get_resource(ctx, data_res_id);
+   /* Pinned: the guest may destroy the window over the virtqueue meanwhile. */
+   struct npt_resource *data_res = npt_context_pin_resource(ctx, data_res_id);
    if (!data_res || data_res->fd_type != VIRGL_RESOURCE_FD_SHM ||
        !data_res->u.data) {
       npt_log("shared: export: data resource %u not found", data_res_id);
+      if (data_res)
+         npt_context_unpin_resource(ctx, data_res);
       return NPT_E_INVALIDARG;
    }
 
@@ -246,9 +249,11 @@ npt_shared_export_blob(struct npt_context *ctx, uint64_t texture_id,
    if ((uint64_t)data_off + sizeof(info) > data_res->size) {
       npt_log("shared: export: data_off=%u overruns res size=%zu",
               data_off, data_res->size);
+      npt_context_unpin_resource(ctx, data_res);
       return NPT_E_INVALIDARG;
    }
    memcpy((uint8_t *)data_res->u.data + data_off, &info, sizeof(info));
+   npt_context_unpin_resource(ctx, data_res);
 
    /* Stage the pending blob the guest KMD claims via
     * RESOURCE_CREATE_BLOB(HOST3D, blob_id).  The table takes fd

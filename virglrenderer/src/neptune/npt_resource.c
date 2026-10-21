@@ -284,18 +284,21 @@ npt_sync_map_remove(struct npt_context *ctx, struct npt_sync_map_entry *e)
       ctx->sync_maps.entries[--ctx->sync_maps.count];
 }
 
-HRESULT
-npt_resource_map(struct npt_context *ctx,
-                 uint64_t context_id, uint64_t resource_id,
-                 uint32_t subresource, uint32_t access_flags,
-                 uint32_t api_map_flags, uint32_t shmem_res_id,
-                 uint64_t read_range_begin,
-                 uint64_t read_range_end,
-                 uint64_t byte_size,
-                 uint32_t mip_height, uint32_t mip_depth,
-                 uint32_t shmem_offset,
-                 uint32_t *out_row_pitch, uint32_t *out_depth_pitch,
-                 uint32_t *out_mapped_size)
+/* RESOURCE_MAP with shmem_res pinned by the caller (NULL when the guest
+ * named no such resource). */
+static HRESULT
+npt_resource_map_pinned(struct npt_context *ctx,
+                        uint64_t context_id, uint64_t resource_id,
+                        uint32_t subresource, uint32_t access_flags,
+                        uint32_t api_map_flags,
+                        struct npt_resource *shmem_res, uint32_t shmem_res_id,
+                        uint64_t read_range_begin,
+                        uint64_t read_range_end,
+                        uint64_t byte_size,
+                        uint32_t mip_height, uint32_t mip_depth,
+                        uint32_t shmem_offset,
+                        uint32_t *out_row_pitch, uint32_t *out_depth_pitch,
+                        uint32_t *out_mapped_size)
 {
    *out_row_pitch = 0;
    *out_depth_pitch = 0;
@@ -311,8 +314,6 @@ npt_resource_map(struct npt_context *ctx,
                                     "map_resource"))
       return NPT_E_INVALIDARG;
 
-   struct npt_resource *shmem_res =
-      npt_context_get_resource(ctx, shmem_res_id);
    if (!shmem_res || shmem_res->fd_type != VIRGL_RESOURCE_FD_SHM ||
        !shmem_res->u.data) {
       npt_log("map_resource: invalid SHM resource %u", shmem_res_id);
@@ -442,14 +443,17 @@ npt_resource_map(struct npt_context *ctx,
    return hr;
 }
 
-HRESULT
-npt_resource_unmap(struct npt_context *ctx,
-                   uint64_t context_id, uint64_t resource_id,
-                   uint32_t subresource, uint32_t shmem_res_id,
-                   uint32_t shmem_offset, uint64_t byte_size,
-                   uint32_t access_flags,
-                   uint64_t written_range_begin,
-                   uint64_t written_range_end)
+/* RESOURCE_UNMAP with shmem_res pinned by the caller (NULL when the guest
+ * named no such resource). */
+static HRESULT
+npt_resource_unmap_pinned(struct npt_context *ctx,
+                          uint64_t context_id, uint64_t resource_id,
+                          uint32_t subresource,
+                          struct npt_resource *shmem_res, uint32_t shmem_res_id,
+                          uint32_t shmem_offset, uint64_t byte_size,
+                          uint32_t access_flags,
+                          uint64_t written_range_begin,
+                          uint64_t written_range_end)
 {
    void *resource = npt_context_lookup_object(ctx, NULL, resource_id,
                                               NPT_OBJECT_TYPE_IUNKNOWN);
@@ -461,8 +465,6 @@ npt_resource_unmap(struct npt_context *ctx,
                                     "unmap_resource"))
       return NPT_E_INVALIDARG;
 
-   struct npt_resource *shmem_res =
-      npt_context_get_resource(ctx, shmem_res_id);
    if (!shmem_res || shmem_res->fd_type != VIRGL_RESOURCE_FD_SHM ||
        !shmem_res->u.data) {
       npt_log("unmap_resource: invalid SHM resource %u", shmem_res_id);
@@ -602,4 +604,52 @@ npt_resource_unmap(struct npt_context *ctx,
 
    npt_sync_map_remove(ctx, entry);
    return NPT_S_OK;
+}
+
+/* The slot is guest shmem the guest may destroy over the virtqueue while
+ * this command, queued on a ring before it, still copies through it: a
+ * staging texture unmapped and released at once (Fall Guys after sign-in)
+ * had its 32 MiB slot munmapped by the context thread mid-memcpy.  The pin
+ * keeps the mapping until the command is done. */
+HRESULT
+npt_resource_map(struct npt_context *ctx,
+                 uint64_t context_id, uint64_t resource_id,
+                 uint32_t subresource, uint32_t access_flags,
+                 uint32_t api_map_flags, uint32_t shmem_res_id,
+                 uint64_t read_range_begin,
+                 uint64_t read_range_end,
+                 uint64_t byte_size,
+                 uint32_t mip_height, uint32_t mip_depth,
+                 uint32_t shmem_offset,
+                 uint32_t *out_row_pitch, uint32_t *out_depth_pitch,
+                 uint32_t *out_mapped_size)
+{
+   struct npt_resource *shmem_res = npt_context_pin_resource(ctx, shmem_res_id);
+   const HRESULT hr = npt_resource_map_pinned(
+      ctx, context_id, resource_id, subresource, access_flags, api_map_flags,
+      shmem_res, shmem_res_id, read_range_begin, read_range_end, byte_size,
+      mip_height, mip_depth, shmem_offset,
+      out_row_pitch, out_depth_pitch, out_mapped_size);
+   if (shmem_res)
+      npt_context_unpin_resource(ctx, shmem_res);
+   return hr;
+}
+
+HRESULT
+npt_resource_unmap(struct npt_context *ctx,
+                   uint64_t context_id, uint64_t resource_id,
+                   uint32_t subresource, uint32_t shmem_res_id,
+                   uint32_t shmem_offset, uint64_t byte_size,
+                   uint32_t access_flags,
+                   uint64_t written_range_begin,
+                   uint64_t written_range_end)
+{
+   struct npt_resource *shmem_res = npt_context_pin_resource(ctx, shmem_res_id);
+   const HRESULT hr = npt_resource_unmap_pinned(
+      ctx, context_id, resource_id, subresource, shmem_res, shmem_res_id,
+      shmem_offset, byte_size, access_flags,
+      written_range_begin, written_range_end);
+   if (shmem_res)
+      npt_context_unpin_resource(ctx, shmem_res);
+   return hr;
 }

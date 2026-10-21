@@ -224,13 +224,16 @@ npt_feedback_slot_ptr(struct npt_resource *res, uint32_t offset, uint32_t size)
    return res->u.data + offset;
 }
 
-/* Forward decls for the type dispatch below. */
+/* Forward decls for the type dispatch below.  res is the entry's
+ * feedback resource, pinned by the caller (NULL when gone). */
 static bool
 npt_feedback_query_poll_one(struct npt_context *ctx,
-                            struct npt_feedback_entry *entry);
+                            struct npt_feedback_entry *entry,
+                            struct npt_resource *res);
 static bool
 npt_feedback_fence_poll_one(struct npt_context *ctx,
-                            struct npt_feedback_entry *entry);
+                            struct npt_feedback_entry *entry,
+                            struct npt_resource *res);
 
 void
 npt_feedback_poll(struct npt_context *ctx, uint32_t *skip)
@@ -274,13 +277,19 @@ npt_feedback_poll_interval(struct npt_context *ctx, uint64_t min_interval_ns)
    list_for_each_entry_safe(struct npt_feedback_entry, entry,
                             &st->pending, pending_head) {
       bool remove = false;
+      /* The slot is guest shmem the guest may destroy over the
+       * virtqueue meanwhile: the pin keeps its mapping until the slot is
+       * written. */
+      struct npt_resource *res = entry->fb_res_id
+         ? npt_context_pin_resource(ctx, entry->fb_res_id)
+         : NULL;
       switch (entry->type) {
       case NPT_FEEDBACK_TYPE_QUERY:
-         remove = npt_feedback_query_poll_one(ctx, entry);
+         remove = npt_feedback_query_poll_one(ctx, entry, res);
          break;
       case NPT_FEEDBACK_TYPE_FENCE:
       case NPT_FEEDBACK_TYPE_FENCE12:
-         remove = npt_feedback_fence_poll_one(ctx, entry);
+         remove = npt_feedback_fence_poll_one(ctx, entry, res);
          break;
       default:
          /* Unknown type: drop from pending so we don't spin; the
@@ -288,6 +297,8 @@ npt_feedback_poll_interval(struct npt_context *ctx, uint64_t min_interval_ns)
          remove = true;
          break;
       }
+      if (res)
+         npt_context_unpin_resource(ctx, res);
       if (remove)
          npt_feedback_clear_pending_locked(ctx, entry);
    }
@@ -308,8 +319,9 @@ npt_feedback_poll_interval(struct npt_context *ctx, uint64_t min_interval_ns)
 
 /* Caller holds feedback state lock. */
 static bool
-npt_feedback_query_poll_one(struct npt_context *ctx,
-                            struct npt_feedback_entry *entry)
+npt_feedback_query_poll_one(UNUSED struct npt_context *ctx,
+                            struct npt_feedback_entry *entry,
+                            struct npt_resource *res)
 {
    if (!entry->host_ctx || !entry->host_obj)
       return false;
@@ -318,7 +330,6 @@ npt_feedback_query_poll_one(struct npt_context *ctx,
    if (entry->cookie > NPT_QUERY_FEEDBACK_SLOT_RESULT)
       return false;
 
-   struct npt_resource *res = npt_context_get_resource(ctx, entry->fb_res_id);
    struct npt_query_feedback_slot *slot =
       npt_feedback_slot_ptr(res, entry->fb_offset, sizeof(*slot));
    if (!slot)
@@ -537,8 +548,9 @@ npt_feedback_fence_mark_signal(struct npt_context *ctx, void *host_fence,
  * and lets pending_count reach zero, which is what a ring thread needs
  * to park rather than poll. */
 static bool
-npt_feedback_fence_poll_one(struct npt_context *ctx,
-                            struct npt_feedback_entry *entry)
+npt_feedback_fence_poll_one(UNUSED struct npt_context *ctx,
+                            struct npt_feedback_entry *entry,
+                            struct npt_resource *res)
 {
    /* Entries reach pending only via the Signal hook, which always
     * resolves host_obj first.  An unresolved entry here would be a
@@ -546,7 +558,6 @@ npt_feedback_fence_poll_one(struct npt_context *ctx,
    if (!entry->host_obj || !entry->fb_res_id)
       return false;
 
-   struct npt_resource *res = npt_context_get_resource(ctx, entry->fb_res_id);
    struct npt_d3d11_fence_feedback_slot *slot =
       npt_feedback_slot_ptr(res, entry->fb_offset, sizeof(*slot));
    if (!slot)
