@@ -16,6 +16,7 @@
 #include "npt_com.h"
 
 struct npt_context;
+struct npt_resource;
 
 /* Hard cap on per-call payload byte_size.  Bounded so the byte_size+7
  * alignment math can't wrap to 0 on a hostile value and read stale
@@ -35,12 +36,15 @@ npt_resource_update(struct npt_context *ctx,
                     const void *payload);
 
 /* RESOURCE_MAP.  read_range_{begin,end} are accepted for the D3D12
- * path (pReadRange) and ignored on D3D11. */
+ * path (pReadRange) and ignored on D3D11.  shmem_res is the guest's
+ * slot, pinned by the caller with npt_context_pin_shm_resource (NULL
+ * when shmem_res_id names no mapped SHM resource). */
 HRESULT
 npt_resource_map(struct npt_context *ctx,
                  uint64_t context_id, uint64_t resource_id,
                  uint32_t subresource, uint32_t access_flags,
-                 uint32_t api_map_flags, uint32_t shmem_res_id,
+                 uint32_t api_map_flags,
+                 struct npt_resource *shmem_res, uint32_t shmem_res_id,
                  uint64_t read_range_begin, uint64_t read_range_end,
                  uint64_t byte_size,
                  uint32_t mip_height, uint32_t mip_depth,
@@ -49,11 +53,13 @@ npt_resource_map(struct npt_context *ctx,
                  uint32_t *out_mapped_size);
 
 /* RESOURCE_UNMAP.  written_range_{begin,end} are accepted for the
- * D3D12 path (pWrittenRange) and ignored on D3D11. */
+ * D3D12 path (pWrittenRange) and ignored on D3D11.  shmem_res as for
+ * RESOURCE_MAP. */
 HRESULT
 npt_resource_unmap(struct npt_context *ctx,
                    uint64_t context_id, uint64_t resource_id,
-                   uint32_t subresource, uint32_t shmem_res_id,
+                   uint32_t subresource,
+                   struct npt_resource *shmem_res, uint32_t shmem_res_id,
                    uint32_t shmem_offset, uint64_t byte_size,
                    uint32_t access_flags,
                    uint64_t written_range_begin,

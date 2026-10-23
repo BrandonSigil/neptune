@@ -9,7 +9,7 @@
  * While an import is alive, munmapping the blob is undefined -- the
  * host graphics driver still owns those pages.  Each import pins the
  * backing npt_resource, so a destroy arriving first only marks the
- * resource a zombie and the last import released completes the free.
+ * resource a zombie and the last pin released completes the free.
  */
 
 #include "npt_heap12.h"
@@ -33,48 +33,6 @@ struct npt_heap_import {
    uint64_t heap_id;              /* guest id of the ID3D12Heap */
    struct npt_resource *res;      /* backing SHM resource */
 };
-
-/* Look up the backing SHM resource and take its import pin inside one
- * resource_mutex section.  npt_context_get_resource returns its pointer
- * after dropping the lock, and the import runs for milliseconds, so
- * pinning from that result races npt_context_destroy_resource: the
- * destroy sees no pin, frees the resource, and the import writes through
- * the freed pointer.  Balanced by npt_heap12_unpin. */
-static struct npt_resource *
-npt_heap12_pin_shm_resource(struct npt_context *ctx, uint32_t res_id)
-{
-   mtx_lock(&ctx->resource_mutex);
-   const struct hash_entry *entry =
-      _mesa_hash_table_search(ctx->resource_table, &res_id);
-   struct npt_resource *res = entry ? entry->data : NULL;
-   if (res && res->fd_type == VIRGL_RESOURCE_FD_SHM && res->u.data)
-      res->heap_import_count++;
-   else
-      res = NULL;
-   mtx_unlock(&ctx->resource_mutex);
-
-   return res;
-}
-
-/* Drop one import pin, completing the free of a resource that was
- * destroyed while pinned. */
-static void
-npt_heap12_unpin(struct npt_context *ctx, struct npt_resource *res)
-{
-   mtx_lock(&ctx->resource_mutex);
-   assert(res->heap_import_count > 0);
-   res->heap_import_count--;
-   const bool free_now = res->zombie && res->heap_import_count == 0 &&
-                         res->command_pin_count == 0;
-   const uint32_t res_id = res->res_id;
-   mtx_unlock(&ctx->resource_mutex);
-
-   if (free_now) {
-      npt_log("heap12: last import pin on zombie res %u dropped; "
-              "completing deferred munmap", res_id);
-      npt_context_free_detached_resource(res);
-   }
-}
 
 #ifdef __linux__
 /* Wrap [offset, offset + size) of the resource's memfd in a udmabuf.
@@ -224,7 +182,7 @@ npt_heap12_create_from_shmem(struct npt_context *ctx,
     * free the mapping under it.  On success the pin becomes the
     * import's; every failure path drops it. */
    struct npt_resource *res =
-      npt_heap12_pin_shm_resource(ctx, cmd->shmem_res_id);
+      npt_context_pin_shm_resource(ctx, cmd->shmem_res_id);
    if (!res) {
       npt_log("create_heap_from_shmem: res %u is not a mapped SHM resource",
               cmd->shmem_res_id);
@@ -301,7 +259,7 @@ npt_heap12_create_from_shmem(struct npt_context *ctx,
    return NPT_S_OK;
 
 err_unpin:
-   npt_heap12_unpin(ctx, res);
+   npt_context_unpin_resource(ctx, res);
    return hr;
 }
 
@@ -335,7 +293,7 @@ npt_dispatch_create_heap_from_shmem(struct npt_context *ctx,
 static void
 npt_heap12_drop_import(struct npt_context *ctx, struct npt_heap_import *imp)
 {
-   npt_heap12_unpin(ctx, imp->res);
+   npt_context_unpin_resource(ctx, imp->res);
    free(imp);
 }
 

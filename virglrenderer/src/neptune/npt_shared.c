@@ -234,14 +234,12 @@ npt_shared_export_blob(struct npt_context *ctx, uint64_t texture_id,
    const uint32_t export_virgl_format =
       npt_shared_dxgi_to_virgl_format(NPT_SHARED_EXPORT_FORMAT(desc));
 
-   /* Publish the export-level facts into the exporter's shmem window. */
-   /* Pinned: the guest may destroy the window over the virtqueue meanwhile. */
-   struct npt_resource *data_res = npt_context_pin_resource(ctx, data_res_id);
-   if (!data_res || data_res->fd_type != VIRGL_RESOURCE_FD_SHM ||
-       !data_res->u.data) {
+   /* Publish the export-level facts into the exporter's shmem window,
+    * pinned: the guest may destroy it over the virtqueue meanwhile. */
+   struct npt_resource *data_res =
+      npt_context_pin_shm_resource(ctx, data_res_id);
+   if (!data_res) {
       npt_log("shared: export: data resource %u not found", data_res_id);
-      if (data_res)
-         npt_context_unpin_resource(ctx, data_res);
       return NPT_E_INVALIDARG;
    }
 

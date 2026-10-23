@@ -365,16 +365,26 @@ npt_dispatch_map_resource(struct npt_context *ctx,
    if (npt_cs_decoder_get_fatal(dec))
       return;
 
+   /* The slot is guest shmem the guest may destroy over the virtqueue
+    * while this command, queued on a ring before it, still copies
+    * through it: a staging texture unmapped and released at once (Fall
+    * Guys after sign-in) had its 32 MiB slot munmapped by the context
+    * thread mid-memcpy.  The pin keeps the mapping until the copy is
+    * done. */
+   struct npt_resource *shmem_res =
+      npt_context_pin_shm_resource(ctx, cmd.shmem_res_id);
    struct npt_cmd_map_resource_reply reply;
    memset(&reply, 0, sizeof(reply));
    reply.header.cmd_type = header->cmd_type;
    reply.header.cmd_return = (uint32_t)npt_resource_map(
       ctx, cmd.context_id, cmd.resource_id, cmd.subresource,
-      cmd.access_flags, cmd.api_map_flags, cmd.shmem_res_id,
+      cmd.access_flags, cmd.api_map_flags, shmem_res, cmd.shmem_res_id,
       cmd.read_range_begin, cmd.read_range_end,
       cmd.byte_size, cmd.mip_height, cmd.mip_depth,
       cmd.shmem_offset,
       &reply.row_pitch, &reply.depth_pitch, &reply.mapped_size);
+   if (shmem_res)
+      npt_context_unpin_resource(ctx, shmem_res);
 
    if (header->cmd_flags & NPT_CMD_FLAG_REPLY) {
       if (npt_cs_encoder_acquire(enc)) {
@@ -398,12 +408,18 @@ npt_dispatch_unmap_resource(struct npt_context *ctx,
    if (npt_cs_decoder_get_fatal(dec))
       return;
 
+   /* Pinned as for RESOURCE_MAP. */
+   struct npt_resource *shmem_res =
+      npt_context_pin_shm_resource(ctx, cmd.shmem_res_id);
    const HRESULT hr = npt_resource_unmap(ctx, cmd.context_id,
                                          cmd.resource_id, cmd.subresource,
-                                         cmd.shmem_res_id, cmd.shmem_offset,
+                                         shmem_res, cmd.shmem_res_id,
+                                         cmd.shmem_offset,
                                          cmd.byte_size, cmd.access_flags,
                                          cmd.written_range_begin,
                                          cmd.written_range_end);
+   if (shmem_res)
+      npt_context_unpin_resource(ctx, shmem_res);
 
    struct npt_cmd_unmap_resource_reply reply;
    memset(&reply, 0, sizeof(reply));
